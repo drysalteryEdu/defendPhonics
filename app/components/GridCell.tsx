@@ -19,9 +19,10 @@ const BG_CLASS: Record<string, string> = {
 interface Props {
   cell: Cell
   onDoubleClick: () => void
+  isHint?: boolean
 }
 
-export default function GridCell({ cell, onDoubleClick }: Props) {
+export default function GridCell({ cell, onDoubleClick, isHint }: Props) {
   const isEmpty = cell.type === 'empty'
 
   const { setNodeRef: setDropRef, isOver } = useDroppable({ id: cell.id })
@@ -68,6 +69,7 @@ export default function GridCell({ cell, onDoubleClick }: Props) {
             ].join(' '),
         isDragging ? 'opacity-30' : '',
         !isEmpty && isOver ? 'ring-4 ring-yellow-300 scale-105' : '',
+        isHint && !isEmpty ? 'ring-4 ring-amber-300 animate-pulse' : '',
       ].join(' ')}
     >
       {isEmpty ? (

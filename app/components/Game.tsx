@@ -10,14 +10,23 @@ import LetterBlock from './LetterBlock'
 import BattleOverlay from './BattleOverlay'
 import DifficultyPicker from './DifficultyPicker'
 import WaveShop from './WaveShop'
+import AchievementToast from './AchievementToast'
+import BadgeGallery from './BadgeGallery'
 import { lookupSynthesis } from '../data/words'
 import { dealHand, refillTiles, type LevelRange, LEVEL_INFO } from '../data/levels'
 import { getRandomShopItems, type ShopItem } from '../data/shopItems'
 import { useGameLoop } from '../hooks/useGameLoop'
 import { playSynthesis, playPlace, playReturn, playInvalid } from '../utils/sounds'
+import {
+  type Achievement,
+  trackHeroSynthesized,
+  trackWaveComplete,
+  trackLevel5,
+} from '../data/achievements'
 
 const ROWS = 3
 const COLS = 5
+const HINT_DELAY_MS = 10_000  // 10s of inactivity triggers hint
 
 function makeEmptyCells(): Record<string, Cell> {
   const cells: Record<string, Cell> = {}
@@ -35,12 +44,37 @@ function overlayTextSize(value: string) {
   return 'text-xl sm:text-3xl'
 }
 
+// Returns pair of IDs [a, b] that can be synthesized, or null
+function findHintPair(
+  hand: HandItem[],
+  cells: Record<string, Cell>,
+): [string, string] | null {
+  // hand × hand
+  for (const a of hand) {
+    for (const b of hand) {
+      if (a.id >= b.id) continue  // avoid duplicates
+      if (lookupSynthesis(a.value, b.value)) return [a.id, b.id]
+    }
+  }
+  // hand × non-hero cell
+  for (const a of hand) {
+    for (const cell of Object.values(cells)) {
+      if (cell.type === 'empty' || cell.type === 'hero') continue
+      if (lookupSynthesis(a.value, cell.value)) return [a.id, cell.id]
+    }
+  }
+  return null
+}
+
 export default function Game() {
   const [level, setLevel]           = useState<LevelRange>(2)
   const [showPicker, setShowPicker] = useState(false)
+  const [showBadges, setShowBadges] = useState(false)
   const [cells, setCells]           = useState(makeEmptyCells)
   const [hand, setHand]             = useState<HandItem[]>(() => dealHand(2))
   const [activeId, setActiveId]     = useState<string | null>(null)
+  const [hintIds, setHintIds]       = useState<Set<string>>(new Set())
+  const [pendingToasts, setPendingToasts] = useState<Achievement[]>([])
   const [loopState, setLoopState]   = useState<GameLoopState>({
     enemies: [], bullets: [], baseHp: 10, wave: 0,
     heroTick: 0, spawnTick: 0, phase: 'idle',
@@ -48,12 +82,27 @@ export default function Game() {
   })
   const [shopItems, setShopItems]   = useState<ShopItem[] | null>(null)
 
-  // useRef for getCells → game loop reads latest state without closure staleness
   const cellsRef = useRef(cells)
   cellsRef.current = cells
+  const handRef = useRef(hand)
+  handRef.current = hand
   const getCells = useCallback(() => cellsRef.current, [])
 
   const loop = useGameLoop(getCells, setLoopState)
+
+  // Track last meaningful player action time for hint system
+  const lastActionRef = useRef(Date.now())
+  function bumpAction() { lastActionRef.current = Date.now(); setHintIds(new Set()) }
+
+  // Hint system: after HINT_DELAY_MS inactivity, highlight a valid synthesis pair
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (Date.now() - lastActionRef.current < HINT_DELAY_MS) return
+      const pair = findHintPair(handRef.current, cellsRef.current)
+      if (pair) setHintIds(new Set(pair))
+    }, 1000)
+    return () => clearInterval(iv)
+  }, [])
 
   // Open wave shop when phase becomes 'shop'
   const lastShopWaveRef = useRef(-1)
@@ -63,6 +112,12 @@ export default function Game() {
       setShopItems(getRandomShopItems(3))
     }
   }, [loopState.phase, loopState.wave])
+
+  // Queue newly unlocked achievements as toasts
+  function queueAchievements(gained: Achievement[]) {
+    if (gained.length === 0) return
+    setPendingToasts(p => [...p, ...gained])
+  }
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -94,13 +149,16 @@ export default function Game() {
 
     if (sourceHand) {
       if (targetCell.type === 'empty') {
+        bumpAction()
         playPlace()
         setHand(p => p.filter(h => h.id !== sourceId))
         setCells(p => ({ ...p, [targetId]: { id: targetId, type: sourceHand.type, value: sourceHand.value } }))
       } else if (targetCell.type !== 'hero') {
         const hit = lookupSynthesis(sourceHand.value, targetCell.value)
         if (hit) {
+          bumpAction()
           playSynthesis()
+          queueAchievements(trackHeroSynthesized(1))
           setHand(p => [...p.filter(h => h.id !== sourceId), ...refillTiles(level, 2)])
           setCells(p => ({ ...p, [targetId]: { id: targetId, type: 'hero', value: hit.word, emoji: hit.emoji } }))
         } else { playInvalid() }
@@ -112,7 +170,9 @@ export default function Game() {
         sourceCell.value === targetCell.value
       ) {
         const newTier = Math.min(3, (sourceCell.tier ?? 1) + (targetCell.tier ?? 1))
+        bumpAction()
         playSynthesis()
+        queueAchievements(trackHeroSynthesized(newTier))
         setCells(p => ({
           ...p,
           [sourceId]: { id: sourceId, type: 'empty', value: '' },
@@ -122,6 +182,7 @@ export default function Game() {
       }
 
       if (targetCell.type === 'empty') {
+        bumpAction()
         playPlace()
         setCells(p => ({
           ...p,
@@ -131,7 +192,9 @@ export default function Game() {
       } else if (targetCell.type !== 'hero' && sourceCell.type !== 'hero') {
         const hit = lookupSynthesis(sourceCell.value, targetCell.value)
         if (hit) {
+          bumpAction()
           playSynthesis()
+          queueAchievements(trackHeroSynthesized(1))
           setHand(p => [...p, ...refillTiles(level, 2)])
           setCells(p => ({
             ...p,
@@ -139,6 +202,7 @@ export default function Game() {
             [targetId]: { id: targetId, type: 'hero', value: hit.word, emoji: hit.emoji },
           }))
         } else {
+          bumpAction()
           playPlace()
           setCells(p => ({
             ...p,
@@ -152,6 +216,8 @@ export default function Game() {
 
   function handleShopSelect(item: ShopItem) {
     setShopItems(null)
+    // Track wave completion achievement when player closes the shop
+    queueAchievements(trackWaveComplete(loopState.wave))
     if (item.id === 'heal') {
       loop.applyEffect(s => { s.baseHp = Math.min(10, s.baseHp + 3) })
     } else if (item.id === 'redraw') {
@@ -159,18 +225,20 @@ export default function Game() {
     } else if (item.id === 'add_tiles') {
       setHand(p => [...p, ...refillTiles(level, 5)])
     } else if (item.id === 'rapid') {
-      loop.applyEffect(s => { s.rapidFireTicks = 400 })  // 400 ticks = 20s at 20fps
+      loop.applyEffect(s => { s.rapidFireTicks = 400 })
     } else if (item.id === 'shield') {
       loop.applyEffect(s => { s.shieldHp = (s.shieldHp ?? 0) + 3 })
     } else if (item.id === 'slow') {
-      loop.applyEffect(s => { s.slowTicks = 300 })  // 300 ticks = 15s at 20fps
+      loop.applyEffect(s => { s.slowTicks = 300 })
     }
+    bumpAction()
     loop.resume()
   }
 
   function handleRemoveFromCell(cellId: string) {
     const cell = cells[cellId]
     if (cell.type === 'empty' || cell.type === 'hero') return
+    bumpAction()
     playReturn()
     setHand(p => [...p, { id: `h-${Date.now()}`, type: cell.type as 'letter' | 'rime', value: cell.value }])
     setCells(p => ({ ...p, [cellId]: { id: cellId, type: 'empty', value: '' } }))
@@ -182,6 +250,7 @@ export default function Game() {
     setHand(dealHand(level))
     setShopItems(null)
     lastShopWaveRef.current = -1
+    bumpAction()
   }
 
   function handleLevelChange(lv: LevelRange) {
@@ -191,6 +260,8 @@ export default function Game() {
     setHand(dealHand(lv))
     setShopItems(null)
     lastShopWaveRef.current = -1
+    bumpAction()
+    if (lv === 5) queueAchievements(trackLevel5())
   }
 
   const active     = getActive()
@@ -218,12 +289,21 @@ export default function Game() {
             {loopState.slowTicks > 0 && <span className="ml-1 bg-cyan-400 text-cyan-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">❄️冰冻</span>}
           </p>
         </div>
-        <button
-          onClick={() => setShowPicker(true)}
-          className="text-xs text-white/80 hover:text-white border border-white/30 hover:border-white/70 rounded-xl px-3 py-1.5 transition-all"
-        >
-          {lvInfo.emoji} 词库
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowBadges(true)}
+            className="text-xs text-white/80 hover:text-white border border-white/30 hover:border-white/70 rounded-xl px-2.5 py-1.5 transition-all"
+            title="功勋徽章"
+          >
+            🏆
+          </button>
+          <button
+            onClick={() => setShowPicker(true)}
+            className="text-xs text-white/80 hover:text-white border border-white/30 hover:border-white/70 rounded-xl px-3 py-1.5 transition-all"
+          >
+            {lvInfo.emoji} 词库
+          </button>
+        </div>
       </header>
 
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
@@ -234,7 +314,14 @@ export default function Game() {
             {Array.from({ length: ROWS }, (_, r) =>
               Array.from({ length: COLS }, (_, c) => {
                 const id = `cell-${r}-${c}`
-                return <GridCell key={id} cell={cells[id]} onDoubleClick={() => handleRemoveFromCell(id)} />
+                return (
+                  <GridCell
+                    key={id}
+                    cell={cells[id]}
+                    onDoubleClick={() => handleRemoveFromCell(id)}
+                    isHint={hintIds.has(id)}
+                  />
+                )
               })
             )}
           </div>
@@ -291,9 +378,16 @@ export default function Game() {
 
         {/* Hand area */}
         <section className="bg-white/20 backdrop-blur-sm rounded-3xl p-3 sm:p-5 shadow-xl w-full max-w-sm sm:max-w-lg">
-          <p className="text-[10px] text-sky-100 text-center mb-3 uppercase tracking-widest">手牌区 · 拖入战场</p>
+          <p className="text-[10px] text-sky-100 text-center mb-3 uppercase tracking-widest">
+            手牌区 · 拖入战场
+            {hintIds.size > 0 && (
+              <span className="ml-2 text-amber-300 animate-pulse">💡 提示闪烁</span>
+            )}
+          </p>
           <div className="flex flex-wrap gap-2 justify-center">
-            {hand.map(item => <LetterBlock key={item.id} item={item} />)}
+            {hand.map(item => (
+              <LetterBlock key={item.id} item={item} isHint={hintIds.has(item.id)} />
+            ))}
             {hand.length === 0 && <p className="text-sky-200 text-sm py-2 w-full text-center">所有字母已上场 ✓</p>}
           </div>
         </section>
@@ -339,6 +433,18 @@ export default function Game() {
           wave={loopState.wave}
           items={shopItems}
           onSelect={handleShopSelect}
+        />
+      )}
+
+      {/* 功勋徽章弹窗 */}
+      {showBadges && <BadgeGallery onClose={() => setShowBadges(false)} />}
+
+      {/* 成就 Toast（先进先出队列） */}
+      {pendingToasts[0] && (
+        <AchievementToast
+          key={pendingToasts[0].id}
+          achievement={pendingToasts[0]}
+          onDismiss={() => setPendingToasts(p => p.slice(1))}
         />
       )}
     </div>

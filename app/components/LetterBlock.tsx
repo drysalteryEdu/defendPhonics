@@ -11,9 +11,10 @@ function textSize(value: string): string {
 
 interface Props {
   item: HandItem
+  isHint?: boolean
 }
 
-export default function LetterBlock({ item }: Props) {
+export default function LetterBlock({ item, isHint }: Props) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: item.id,
     data: { source: 'hand', item },
@@ -34,6 +35,7 @@ export default function LetterBlock({ item }: Props) {
         'shadow-md hover:shadow-xl hover:scale-105 transition-all duration-150',
         item.type === 'rime' ? 'bg-emerald-400' : 'bg-blue-400',
         isDragging ? 'opacity-30' : '',
+        isHint ? 'ring-4 ring-amber-300 ring-offset-2 animate-pulse' : '',
       ].join(' ')}
     >
       <span className={`${textSize(item.value)} font-black text-white leading-none`}>
