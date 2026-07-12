@@ -6,13 +6,12 @@ import type { HandItem } from '../types'
 export type LevelRange = 1 | 2 | 3 | 4 | 5
 
 // ── Level 1: The Alphabet ─────────────────────────────────────────
-// 26 个单字母，只做同质升级，无词根合成
 const L1_LETTERS: HandItem[] = [
   'a','b','c','d','e','f','g','h','i','j','k','l','m',
   'n','o','p','q','r','s','t','u','v','w','x','y','z',
 ].map((v, i) => ({ id: `l1-${v}-${i}`, type: 'letter', value: v }))
 
-// ── Level 2: Short Vowels – 精选辅音 + 各词族词根 ────────────────
+// ── Level 2: Short Vowels ──────────────────────────────────────────
 const L2_CONSONANTS: HandItem[] = [
   'b','c','d','f','h','j','l','m','n','p','r','s','t','w','z',
 ].map((v, i) => ({ id: `l2-c-${v}-${i}`, type: 'letter', value: v }))
@@ -26,11 +25,11 @@ const L2_RIMES: HandItem[] = [
 ].map((v, i) => ({ id: `l2-r-${i}`, type: 'rime', value: v }))
 
 // ── Level 3: Long Vowels / Magic E ───────────────────────────────
-// Magic E 块 (a_e / i_e / o_e / u_e) — 未来魔法熔炉专用（无 '-' 前缀）
-// 元音字母组合 (-ee/-ea/-ay/-ow/-igh) — 可直接二合成词（有 '-' 前缀）
+// Magic E (a_e etc.) 无 '-' 前缀（未来魔法熔炉专用）
+// 元音字母组合 (-ee/-ea/-ay/-ow/-igh) 有 '-' 前缀（可直接二合成词）
 const L3_VOWEL_BLOCKS: HandItem[] = [
-  'a_e','i_e','o_e','u_e',           // Magic E (future Magic Forge)
-  '-ee','-ea','-ai','-ay','-oa','-ow','-igh',  // digraph rimes
+  'a_e','i_e','o_e','u_e',
+  '-ee','-ea','-ai','-ay','-oa','-ow','-igh',
 ].map((v, i) => ({ id: `l3-v-${i}`, type: 'rime', value: v }))
 
 const L3_CONSONANTS: HandItem[] = [
@@ -38,7 +37,6 @@ const L3_CONSONANTS: HandItem[] = [
 ].map((v, i) => ({ id: `l3-c-${v}-${i}`, type: 'letter', value: v }))
 
 // ── Level 4: Consonant Blends / Digraphs ─────────────────────────
-// sh/ch/th/wh/bl/cl/cr/fr/gr/st/sw 作为整体字母块
 const L4_BLENDS: HandItem[] = [
   'sh','ch','th','wh','ph',
   'bl','cl','fl','gl','pl',
@@ -49,10 +47,29 @@ const L4_BLENDS: HandItem[] = [
 
 // ── Level 5: R-Controlled + Diphthongs ───────────────────────────
 const L5_ADVANCED: HandItem[] = [
-  '-ar','-er','-ir','-or','-ur',  // r-controlled vowels
-  '-oy','-oi',                     // diphthongs
-  '-oo','-aw',                     // other vowel patterns
+  '-ar','-er','-ir','-or','-ur',
+  '-oy','-oi',
+  '-oo','-aw',
 ].map((v, i) => ({ id: `l5-a-${i}`, type: 'rime', value: v }))
+
+// ── 保底合成对：确保每次发牌至少有一个可以合成的词 ──────────────
+// [字母值, 词根值]，词根必须以 '-' 开头
+const SEED_PAIRS: Partial<Record<LevelRange, Array<[string, string]>>> = {
+  2: [['c','-at'],['h','-en'],['p','-ig'],['b','-ug'],['f','-an'],['d','-og'],['j','-et'],['r','-at'],['m','-op'],['b','-ig']],
+  3: [['b','-ee'],['t','-ea'],['s','-ay'],['b','-ow'],['h','-igh'],['p','-ay'],['d','-ay'],['l','-ow'],['s','-ea']],
+  4: [['sh','-op'],['ch','-ip'],['cl','-am'],['fl','-ip'],['st','-op'],['sn','-ap'],['tr','-ip'],['ch','-at'],['sp','-ot']],
+  5: [['c','-ar'],['j','-ar'],['b','-oy'],['j','-oy'],['t','-oy'],['m','-oo'],['p','-aw'],['f','-ur'],['b','-ar']],
+}
+
+function findGuaranteedPair(pool: HandItem[], level: LevelRange): [HandItem, HandItem] | null {
+  const candidates = shuffle(SEED_PAIRS[level] ?? [])
+  for (const [lv, rv] of candidates) {
+    const letter = pool.find(h => h.type === 'letter' && h.value === lv)
+    const rime   = pool.find(h => h.type === 'rime'   && h.value === rv)
+    if (letter && rime) return [letter, rime]
+  }
+  return null
+}
 
 // ── 根据选择的最高 Level 返回累加手牌池 ───────────────────────────
 export function getHandPool(maxLevel: LevelRange): HandItem[] {
@@ -65,32 +82,40 @@ export function getHandPool(maxLevel: LevelRange): HandItem[] {
   return pool
 }
 
-// ── 合成英雄后补充手牌（随机 N 张，Level 2+ 保证至少 1 张词根）──
+// ── 合成英雄后补充手牌（Level 2+ 保证至少 1 张词根）─────────────
 export function refillTiles(maxLevel: LevelRange, count = 2): HandItem[] {
   const pool = getHandPool(maxLevel)
   const ts = Date.now()
   if (maxLevel === 1 || count <= 1) {
     return shuffle(pool).slice(0, count).map((h, i) => ({ ...h, id: `rf-${i}-${ts}` }))
   }
-  const rime   = shuffle(pool.filter(h => h.type === 'rime'))[0]
+  // 优先给可合成的词根（从 L2 rimes 中随机取一个）
+  const synRimes = pool.filter(h => h.type === 'rime' && h.value.startsWith('-'))
+  const rime   = shuffle(synRimes)[0] ?? shuffle(pool.filter(h => h.type === 'rime'))[0]
   const others = shuffle(pool.filter(h => h !== rime)).slice(0, count - 1)
   return [rime, ...others].map((h, i) => ({ ...h, id: `rf-${i}-${ts}` }))
 }
 
-// ── 起始展示手牌（每次开局随机抽取 N 张）────────────────────────
+// ── 起始发牌：Level 2+ 保证至少有一对可合成的 ──────────────────
 export function dealHand(maxLevel: LevelRange, count = 11): HandItem[] {
   const pool = getHandPool(maxLevel)
+  const ts   = Date.now()
 
   if (maxLevel === 1) {
-    // Level 1：只发字母，不发词根
     const letters = pool.filter(h => h.type === 'letter')
-    return shuffle(letters).slice(0, count).map((h, i) => ({ ...h, id: `hand-${i}-${Date.now()}` }))
+    return shuffle(letters).slice(0, count).map((h, i) => ({ ...h, id: `hand-${i}-${ts}` }))
   }
 
-  // Level 2+：确保至少有 3 个词根块 + 5 个辅音字母
-  const rimes   = shuffle(pool.filter(h => h.type === 'rime')).slice(0, 4)
-  const letters = shuffle(pool.filter(h => h.type === 'letter')).slice(0, count - rimes.length)
-  return [...letters, ...rimes].map((h, i) => ({ ...h, id: `hand-${i}-${Date.now()}` }))
+  // 先锁定一个保底合成对
+  const pair = findGuaranteedPair(pool, maxLevel)
+  const guaranteed = pair ? [pair[0], pair[1]] : []
+
+  // 剩余池中再补 2 个词根 + 若干字母填满
+  const rest     = pool.filter(h => !guaranteed.includes(h))
+  const extraR   = shuffle(rest.filter(h => h.type === 'rime' && h.value.startsWith('-'))).slice(0, 2)
+  const extraL   = shuffle(rest.filter(h => h.type === 'letter')).slice(0, Math.max(0, count - guaranteed.length - extraR.length))
+
+  return shuffle([...guaranteed, ...extraR, ...extraL]).map((h, i) => ({ ...h, id: `hand-${i}-${ts}` }))
 }
 
 function shuffle<T>(arr: T[]): T[] {
@@ -104,9 +129,9 @@ function shuffle<T>(arr: T[]): T[] {
 
 // ── Level 元信息 ─────────────────────────────────────────────────
 export const LEVEL_INFO: Record<LevelRange, { label: string; emoji: string; desc: string; color: string }> = {
-  1: { label: 'Book 1',   emoji: '📗', desc: '26字母 · 字母发音',           color: 'bg-emerald-500' },
-  2: { label: '1 + 2',   emoji: '📘', desc: '+ 短元音 CVC · -at/-ig/-en…', color: 'bg-blue-500'    },
-  3: { label: '1 + 2 + 3', emoji: '📙', desc: '+ 长元音 · Magic E · a_e',   color: 'bg-orange-500'  },
-  4: { label: '1–4',     emoji: '📒', desc: '+ 辅音连读 sh/ch/bl/cr…',     color: 'bg-yellow-500'  },
-  5: { label: '1–5',     emoji: '📕', desc: '+ 控制元音 ar/er/or·双元音',   color: 'bg-red-500'     },
+  1: { label: 'Book 1',     emoji: '📗', desc: '26字母 · 字母发音',           color: 'bg-emerald-500' },
+  2: { label: '1 + 2',     emoji: '📘', desc: '+ 短元音 CVC · -at/-ig/-en…', color: 'bg-blue-500'    },
+  3: { label: '1 + 2 + 3', emoji: '📙', desc: '+ 长元音 · Magic E · a_e',    color: 'bg-orange-500'  },
+  4: { label: '1–4',       emoji: '📒', desc: '+ 辅音连读 sh/ch/bl/cr…',     color: 'bg-yellow-500'  },
+  5: { label: '1–5',       emoji: '📕', desc: '+ 控制元音 ar/er/or·双元音',   color: 'bg-red-500'     },
 }
