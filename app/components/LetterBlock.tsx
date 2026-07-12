@@ -1,4 +1,5 @@
 'use client'
+import React from 'react'
 import { useDraggable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import type { HandItem } from '../types'
@@ -20,7 +21,10 @@ export default function LetterBlock({ item, isHint }: Props) {
     data: { source: 'hand', item },
   })
 
-  const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined
+  // touch-action:none 必须内联，确保 Android 浏览器不劫持触摸用于滚动
+  const baseStyle: React.CSSProperties = { touchAction: 'none' }
+  const dragStyle = transform ? { transform: CSS.Translate.toString(transform) } : {}
+  const style = { ...baseStyle, ...dragStyle }
 
   return (
     <div
@@ -31,7 +35,7 @@ export default function LetterBlock({ item, isHint }: Props) {
       className={[
         // square, responsive: 56px mobile / 96px sm+
         'w-14 h-14 sm:w-24 sm:h-24 rounded-2xl flex items-center justify-center',
-        'cursor-grab active:cursor-grabbing select-none touch-manipulation',
+        'cursor-grab active:cursor-grabbing select-none touch-none',
         'shadow-md hover:shadow-xl hover:scale-105 transition-all duration-150',
         item.type === 'rime' ? 'bg-emerald-400' : 'bg-blue-400',
         isDragging ? 'opacity-30' : '',
