@@ -337,19 +337,54 @@ create table achievements (
   - 记录事件：`game_start` / `place_tile` / `synthesize_hero` / `upgrade_hero` / `invalid_synthesis` / `shop_select` / `return_tile` / `game_reset` / `wave_complete`
 - `docs/supabase-setup.sql`：建表 + RLS + pg_cron 6 个月自动清理 SQL
 
-**Supabase 接入方法**（填写 Vercel 环境变量或本地 `.env.local`）：
-```
-NEXT_PUBLIC_SUPABASE_URL=你的项目地址
-NEXT_PUBLIC_SUPABASE_ANON_KEY=你的匿名密钥
-```
-然后在 Supabase Dashboard → SQL Editor 执行 `docs/supabase-setup.sql`。
+**Supabase 接入完整流程（已完成，2026-07-12）**
 
-**6 个月日志保留**（pg_cron，已含在 setup SQL 中）：
+| 步骤 | 操作 | 状态 |
+|------|------|------|
+| 1 | 在 Supabase 创建项目 `wyimsgozynhotjdzqgfv` | ✅ |
+| 2 | 在 Dashboard → SQL Editor 手动执行建表 SQL | ✅ 用户手动完成 |
+| 3 | 在 Vercel 配置环境变量（见下方）| ✅ |
+| 4 | `vercel --prod` 重新部署 | ✅ 2026-07-12 |
+
+**Vercel 环境变量（Project: defend-phonics，Environment: Production）**：
+```
+NEXT_PUBLIC_SUPABASE_URL  = https://wyimsgozynhotjdzqgfv.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...（JWT anon key）
+```
+
+**操作注意事项（踩坑记录）**：
+- `vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY` 时 Vercel CLI 会弹出 rename 警告，
+  必须选择 **Keep as NEXT_PUBLIC_...（保留原名）**，否则浏览器端无法读取
+- "Is it sensitive?" 回答 **No**（anon key 本来就是公开设计的）
+- 用 stdin 重定向传值可跳过交互：
+  ```bash
+  echo "your-key" | vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY production
+  ```
+- `sb_publishable_*` 格式（新版 Supabase key）和 `eyJ...`（JWT 格式）**两者均可**连通
+  supabase-js v2 建议使用 JWT 格式
+
+**Supabase 表结构**（`phonics_defend_logs`）：
 ```sql
+id          bigserial PRIMARY KEY
+session_id  text NOT NULL          -- 设备唯一标识（localStorage 持久化）
+event_type  text NOT NULL          -- place_tile / synthesize_hero / game_start 等
+wave        integer                -- 当前波次
+level       text                   -- 已选单元 JSON 字符串
+details     jsonb DEFAULT '{}'     -- 事件详情（word / letter / rime 等）
+client_time timestamptz NOT NULL   -- 客户端时间
+created_at  timestamptz DEFAULT now()
+```
+
+**RLS 策略**：anon 角色只允许 INSERT，不允许 SELECT/UPDATE/DELETE
+
+**6 个月日志保留**（pg_cron，在 Dashboard SQL Editor 执行）：
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_cron;
 SELECT cron.schedule('phonics-log-cleanup-6m', '0 3 * * *',
   $$DELETE FROM phonics_defend_logs WHERE client_time < NOW() - INTERVAL '6 months';$$
 );
 ```
+> ⚠️ pg_cron 在部分 Supabase 套餐需要单独申请开启，如失败可先跳过，改用手动清理
 
 #### 3. 自然拼读语音（Gemini 实现 + 本版修复）
 - `app/utils/phonicsAudio.ts`：基于 Web Speech API
