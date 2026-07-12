@@ -49,10 +49,7 @@ function overlayTextSize(value: string) {
   return 'text-xl sm:text-3xl'
 }
 
-function findHintPair(
-  hand: HandItem[],
-  cells: Record<string, Cell>,
-): [string, string] | null {
+function findHintPair(hand: HandItem[], cells: Record<string, Cell>): [string, string] | null {
   for (const a of hand) {
     for (const b of hand) {
       if (a.id >= b.id) continue
@@ -69,54 +66,54 @@ function findHintPair(
 }
 
 export default function Game() {
-  const [level, setLevel]           = useState<LevelRange>(2)
-  const [showPicker, setShowPicker] = useState(false)
-  const [showBadges, setShowBadges] = useState(false)
-  const [cells, setCells]           = useState(makeEmptyCells)
-  const [hand, setHand]             = useState<HandItem[]>(() => dealHand(2))
-  const [activeId, setActiveId]     = useState<string | null>(null)
-  const [hintIds, setHintIds]       = useState<Set<string>>(new Set())
+  const [level, setLevel]             = useState<LevelRange>(2)
+  const [showPicker, setShowPicker]   = useState(false)
+  const [showBadges, setShowBadges]   = useState(false)
+  const [hintMode, setHintMode]       = useState(false)   // 提示模式，默认关闭
+  const [cells, setCells]             = useState(makeEmptyCells)
+  const [hand, setHand]               = useState<HandItem[]>(() => dealHand(2))
+  const [activeId, setActiveId]       = useState<string | null>(null)
+  const [hintIds, setHintIds]         = useState<Set<string>>(new Set())
   const [pendingToasts, setPendingToasts] = useState<Achievement[]>([])
-  const [shopItems, setShopItems]   = useState<ShopItem[] | null>(null)
-  // 激励音乐（每局最多触发 2 次，每波只触发 1 次）
-  const [musicSong, setMusicSong]   = useState<Song | null>(null)
-  const lastMusicWaveRef            = useRef(-1)
-  const lastSongIdRef               = useRef(-1)
-  const musicRewardCountRef         = useRef(0)  // 全局计数，上限 2
-  const [loopState, setLoopState]   = useState<GameLoopState>({
+  const [shopItems, setShopItems]     = useState<ShopItem[] | null>(null)
+  // 激励音乐（每局最多 2 次）
+  const [musicSong, setMusicSong]     = useState<Song | null>(null)
+  const lastMusicWaveRef              = useRef(-1)
+  const lastSongIdRef                 = useRef(-1)
+  const musicRewardCountRef           = useRef(0)
+  const [loopState, setLoopState]     = useState<GameLoopState>({
     enemies: [], bullets: [], baseHp: 10, wave: 0,
     heroTick: 0, spawnTick: 0, phase: 'idle',
     rapidFireTicks: 0, shieldHp: 0, slowTicks: 0,
   })
 
-  const cellsRef = useRef(cells)
-  cellsRef.current = cells
-  const handRef = useRef(hand)
-  handRef.current = hand
-  const getCells = useCallback(() => cellsRef.current, [])
+  // Refs 供 game loop / hint interval 读取最新值（避免 stale closure）
+  const cellsRef = useRef(cells); cellsRef.current = cells
+  const handRef  = useRef(hand);  handRef.current  = hand
+  const levelRef = useRef(level); levelRef.current = level
+  const getCells  = useCallback(() => cellsRef.current, [])
+  const getLevel  = useCallback(() => levelRef.current, [])
 
-  const loop = useGameLoop(getCells, setLoopState)
+  const loop = useGameLoop(getCells, setLoopState, getLevel)
 
   const isPlaying = loopState.phase === 'playing'
   const isPaused  = loopState.phase === 'paused'
   const isOver    = loopState.phase === 'over'
   const isShop    = loopState.phase === 'shop'
 
-  // ── 防沉溺 ────────────────────────────────────────────────────
+  // ── 防沉溺 ─────────────────────────────────────────────────────
   const antiAdd = useAntiAddiction(isPlaying)
-
-  // 达到 break 阈值时自动暂停
   useEffect(() => {
     if (antiAdd.showBreak && isPlaying) loop.pause()
-  }, [antiAdd.showBreak, isPlaying])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [antiAdd.showBreak, isPlaying])   // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── 激励音乐：HP 降至临界值时触发 ───────────────────────────
+  // ── 激励音乐：HP 降至临界值触发 ────────────────────────────────
   useEffect(() => {
     if (!FEATURES.musicReward) return
     if (loopState.phase !== 'playing') return
     if (loopState.baseHp > FEATURES.musicCriticalHp) return
-    if (lastMusicWaveRef.current === loopState.wave) return   // 本波已触发过
-    if (musicRewardCountRef.current >= 2) return              // 全局上限 2 次
+    if (lastMusicWaveRef.current === loopState.wave) return
+    if (musicRewardCountRef.current >= 2) return
     lastMusicWaveRef.current = loopState.wave
     musicRewardCountRef.current++
     loop.pause()
@@ -131,27 +128,28 @@ export default function Game() {
     loop.resume()
   }
 
-  // ── 波次商店 ─────────────────────────────────────────────────
+  // ── 波次商店 ───────────────────────────────────────────────────
   const lastShopWaveRef = useRef(-1)
   useEffect(() => {
     if (loopState.phase === 'shop' && lastShopWaveRef.current !== loopState.wave) {
       lastShopWaveRef.current = loopState.wave
-      setShopItems(getRandomShopItems(3))
+      setShopItems(getRandomShopItems(FEATURES.shopItemCount))
     }
   }, [loopState.phase, loopState.wave])
 
-  // ── 提示系统 ─────────────────────────────────────────────────
+  // ── 提示系统（只在 hintMode 开启时运行）────────────────────────
   const lastActionRef = useRef(Date.now())
   function bumpAction() { lastActionRef.current = Date.now(); setHintIds(new Set()) }
 
   useEffect(() => {
+    if (!hintMode) { setHintIds(new Set()); return }
     const iv = setInterval(() => {
       if (Date.now() - lastActionRef.current < HINT_DELAY_MS) return
       const pair = findHintPair(handRef.current, cellsRef.current)
       if (pair) setHintIds(new Set(pair))
     }, 1000)
     return () => clearInterval(iv)
-  }, [])
+  }, [hintMode])
 
   function queueAchievements(gained: Achievement[]) {
     if (gained.length === 0) return
@@ -245,13 +243,33 @@ export default function Game() {
   function handleShopSelect(item: ShopItem) {
     setShopItems(null)
     queueAchievements(trackWaveComplete(loopState.wave))
-    if (item.id === 'heal')       loop.applyEffect(s => { s.baseHp = Math.min(10, s.baseHp + 3) })
-    else if (item.id === 'redraw')    setHand(dealHand(level))
-    else if (item.id === 'add_tiles') setHand(p => [...p, ...refillTiles(level, 5)])
-    else if (item.id === 'rapid')  loop.applyEffect(s => { s.rapidFireTicks = 400 })
-    else if (item.id === 'shield') loop.applyEffect(s => { s.shieldHp = (s.shieldHp ?? 0) + 3 })
-    else if (item.id === 'slow')   loop.applyEffect(s => { s.slowTicks = 300 })
     bumpAction()
+
+    if (item.id === 'heal') {
+      loop.applyEffect(s => { s.baseHp = Math.min(10, s.baseHp + 3) })
+    } else if (item.id === 'fullheal') {
+      loop.applyEffect(s => { s.baseHp = 10; s.shieldHp = 0 })
+    } else if (item.id === 'bomb') {
+      loop.applyEffect(s => { s.enemies = []; s.bullets = [] })
+    } else if (item.id === 'redraw') {
+      if (FEATURES.redrawClearsGrid) {
+        // 清空战场英雄 + 清扫残余敌人 + 补充 14 张牌
+        loop.applyEffect(s => { s.enemies = []; s.bullets = [] })
+        setCells(makeEmptyCells())
+        setHand(dealHand(level, 14))
+      } else {
+        setHand(dealHand(level))
+      }
+    } else if (item.id === 'add_tiles') {
+      setHand(p => [...p, ...refillTiles(level, 5)])
+    } else if (item.id === 'rapid') {
+      loop.applyEffect(s => { s.rapidFireTicks = 400 })
+    } else if (item.id === 'shield') {
+      loop.applyEffect(s => { s.shieldHp = (s.shieldHp ?? 0) + 3 })
+    } else if (item.id === 'slow') {
+      loop.applyEffect(s => { s.slowTicks = 300 })
+    }
+
     loop.resume()
   }
 
@@ -267,8 +285,7 @@ export default function Game() {
     loop.reset()
     setCells(makeEmptyCells())
     setHand(dealHand(level))
-    setShopItems(null)
-    setMusicSong(null)
+    setShopItems(null); setMusicSong(null)
     lastShopWaveRef.current = -1
     lastMusicWaveRef.current = -1
     musicRewardCountRef.current = 0
@@ -276,18 +293,23 @@ export default function Game() {
   }
 
   function handleLevelChange(lv: LevelRange) {
-    setLevel(lv)
-    loop.reset()
+    setLevel(lv); loop.reset()
     setCells(makeEmptyCells())
     setHand(dealHand(lv))
-    setShopItems(null)
-    setMusicSong(null)
+    setShopItems(null); setMusicSong(null)
     lastShopWaveRef.current = -1
     lastMusicWaveRef.current = -1
     musicRewardCountRef.current = 0
     bumpAction()
     if (lv === 5) queueAchievements(trackLevel5())
   }
+
+  // 如果 redrawClearsGrid，展示时修改描述
+  const enrichedShopItems = shopItems?.map(item =>
+    item.id === 'redraw' && FEATURES.redrawClearsGrid
+      ? { ...item, label: '重置战场', emoji: '🔄', desc: '清空战场+手牌，全新部署（+14张）' }
+      : item
+  ) ?? null
 
   const active    = getActive()
   const heroCount = Object.values(cells).filter(c => c.type === 'hero').length
@@ -302,19 +324,30 @@ export default function Game() {
       <header className="flex items-center justify-between w-full max-w-sm sm:max-w-lg">
         <div>
           <h1 className="text-2xl sm:text-3xl font-black text-white drop-shadow-lg tracking-wide">🛡️ 拼读保卫战</h1>
-          <p className="text-sky-100 text-xs mt-0.5">
+          <p className="text-sky-100 text-xs mt-0.5 flex flex-wrap items-center gap-1">
             {lvInfo.emoji} {lvInfo.label}
-            {heroCount > 0 && <span className="ml-2 bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{heroCount} 英雄</span>}
-            {loopState.shieldHp > 0 && <span className="ml-1 bg-blue-400 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">🛡️{loopState.shieldHp}</span>}
-            {loopState.rapidFireTicks > 0 && <span className="ml-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">⚡速射</span>}
-            {loopState.slowTicks > 0 && <span className="ml-1 bg-cyan-400 text-cyan-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">❄️冰冻</span>}
-            {FEATURES.antiAddiction && antiAdd.playMin > 0 && (
-              <span className="ml-1 text-sky-300 text-[10px]">⏱{antiAdd.playMin}m</span>
-            )}
+            {heroCount > 0 && <span className="bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{heroCount} 英雄</span>}
+            {loopState.shieldHp > 0 && <span className="bg-blue-400 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">🛡️{loopState.shieldHp}</span>}
+            {loopState.rapidFireTicks > 0 && <span className="bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">⚡速射</span>}
+            {loopState.slowTicks > 0 && <span className="bg-cyan-400 text-cyan-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">❄️冰冻</span>}
+            {FEATURES.antiAddiction && antiAdd.playMin > 0 && <span className="text-sky-300 text-[10px]">⏱{antiAdd.playMin}m</span>}
           </p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={() => setShowBadges(true)} className="text-xs text-white/80 hover:text-white border border-white/30 hover:border-white/70 rounded-xl px-2.5 py-1.5 transition-all" title="功勋徽章">
+        <div className="flex gap-1.5">
+          {/* 提示模式开关（界面可选，默认关闭） */}
+          <button
+            onClick={() => setHintMode(v => !v)}
+            title={hintMode ? '关闭提示' : '开启新手提示（10秒无操作后亮起）'}
+            className={[
+              'text-xs border rounded-xl px-2.5 py-1.5 transition-all',
+              hintMode
+                ? 'bg-amber-400/30 border-amber-300 text-amber-200'
+                : 'text-white/60 border-white/20 hover:text-white hover:border-white/50',
+            ].join(' ')}
+          >
+            💡
+          </button>
+          <button onClick={() => setShowBadges(true)} title="功勋徽章" className="text-xs text-white/80 hover:text-white border border-white/30 hover:border-white/70 rounded-xl px-2.5 py-1.5 transition-all">
             🏆
           </button>
           <button onClick={() => setShowPicker(true)} className="text-xs text-white/80 hover:text-white border border-white/30 hover:border-white/70 rounded-xl px-3 py-1.5 transition-all">
@@ -324,7 +357,7 @@ export default function Game() {
       </header>
 
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        {/* 3×5 Battle Grid */}
+        {/* 3×5 战场 */}
         <section className="relative bg-white/20 backdrop-blur-sm rounded-3xl p-3 sm:p-4 shadow-2xl w-full max-w-sm sm:max-w-lg">
           <p className="text-[10px] text-sky-100 text-center mb-2 uppercase tracking-widest">战场 3×5</p>
           <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${COLS}, 1fr)` }}>
@@ -342,9 +375,7 @@ export default function Game() {
               })
             )}
           </div>
-          {(isPlaying || isPaused || isOver || isShop) && (
-            <BattleOverlay loop={loopState} />
-          )}
+          {(isPlaying || isPaused || isOver || isShop) && <BattleOverlay loop={loopState} />}
         </section>
 
         {/* 控制栏 */}
@@ -392,7 +423,8 @@ export default function Game() {
         <section className="bg-white/20 backdrop-blur-sm rounded-3xl p-3 sm:p-5 shadow-xl w-full max-w-sm sm:max-w-lg">
           <p className="text-[10px] text-sky-100 text-center mb-3 uppercase tracking-widest">
             手牌区 · 拖入战场
-            {hintIds.size > 0 && <span className="ml-2 text-amber-300 animate-pulse">💡 提示闪烁</span>}
+            {hintMode && hintIds.size > 0 && <span className="ml-2 text-amber-300 animate-pulse">💡 提示闪烁</span>}
+            {hintMode && hintIds.size === 0 && <span className="ml-2 text-amber-300/50">💡 提示模式</span>}
           </p>
           <div className="flex flex-wrap gap-2 justify-center">
             {hand.map(item => (
@@ -424,29 +456,22 @@ export default function Game() {
         </button>
       </footer>
 
-      {/* ── 弹窗层 ──────────────────────────────────────────────── */}
+      {/* ── 弹窗层 ────────────────────────────────────────────── */}
+      {showPicker && <DifficultyPicker value={level} onChange={handleLevelChange} onClose={() => setShowPicker(false)} />}
 
-      {showPicker && (
-        <DifficultyPicker value={level} onChange={handleLevelChange} onClose={() => setShowPicker(false)} />
-      )}
-
-      {isShop && shopItems && (
-        <WaveShop wave={loopState.wave} items={shopItems} onSelect={handleShopSelect} />
+      {isShop && enrichedShopItems && (
+        <WaveShop wave={loopState.wave} items={enrichedShopItems} onSelect={handleShopSelect} />
       )}
 
       {showBadges && <BadgeGallery onClose={() => setShowBadges(false)} />}
 
-      {/* 激励音乐（HP 危急时） */}
       {FEATURES.musicReward && musicSong && (
         <MusicReward song={musicSong} onClaim={handleMusicClaim} />
       )}
 
-      {/* 防沉溺提示条 */}
       {antiAdd.showWarn && (
         <AntiAddictionOverlay playMin={antiAdd.playMin} mode="warn" onContinue={antiAdd.dismissWarn} />
       )}
-
-      {/* 防沉溺建议休息（全屏） */}
       {antiAdd.showBreak && (
         <AntiAddictionOverlay
           playMin={antiAdd.playMin}
@@ -455,7 +480,6 @@ export default function Game() {
         />
       )}
 
-      {/* 成就 Toast */}
       {pendingToasts[0] && (
         <AchievementToast
           key={pendingToasts[0].id}

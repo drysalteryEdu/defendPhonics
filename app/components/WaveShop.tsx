@@ -47,7 +47,8 @@ export default function WaveShop({ wave, items, onSelect }: Props) {
               <h2 className="text-white text-lg font-black">选择一个道具</h2>
               <p className="text-purple-300 text-xs mt-1">强化防线，迎接下一波挑战</p>
             </div>
-            <div className="flex flex-col gap-2.5">
+            {/* 3件以下用竖排，4件以上用 2×2 宫格 */}
+            <div className={items.length >= 4 ? 'grid grid-cols-2 gap-2' : 'flex flex-col gap-2.5'}>
               {items.map(item => (
                 <button
                   key={item.id}
@@ -55,7 +56,9 @@ export default function WaveShop({ wave, items, onSelect }: Props) {
                   disabled={picked !== null}
                   data-testid={`shop-item-${item.id}`}
                   className={[
-                    'flex items-center gap-3 p-3 rounded-2xl border-2 transition-all text-left',
+                    items.length >= 4
+                      ? 'flex flex-col items-center gap-1.5 p-3 rounded-2xl border-2 transition-all'
+                      : 'flex items-center gap-3 p-3 rounded-2xl border-2 transition-all text-left',
                     picked === item.id
                       ? 'border-amber-400 bg-amber-400/20 scale-105'
                       : picked !== null
@@ -63,11 +66,23 @@ export default function WaveShop({ wave, items, onSelect }: Props) {
                       : 'border-white/20 bg-white/10 hover:border-amber-300 hover:bg-amber-300/10 active:scale-95 cursor-pointer',
                   ].join(' ')}
                 >
-                  <span className="text-3xl shrink-0">{item.emoji}</span>
-                  <div>
-                    <div className="text-white font-bold text-sm">{item.label}</div>
-                    <div className="text-purple-300 text-[11px] leading-tight mt-0.5">{item.desc}</div>
-                  </div>
+                  {items.length >= 4 ? (
+                    // 宫格模式：竖排紧凑
+                    <>
+                      <span className="text-2xl">{item.emoji}</span>
+                      <div className="text-white font-bold text-[11px] text-center leading-tight">{item.label}</div>
+                      <div className="text-purple-300 text-[9px] text-center leading-tight">{item.desc}</div>
+                    </>
+                  ) : (
+                    // 列表模式：横排
+                    <>
+                      <span className="text-3xl shrink-0">{item.emoji}</span>
+                      <div>
+                        <div className="text-white font-bold text-sm">{item.label}</div>
+                        <div className="text-purple-300 text-[11px] leading-tight mt-0.5">{item.desc}</div>
+                      </div>
+                    </>
+                  )}
                 </button>
               ))}
             </div>
