@@ -1,4 +1,5 @@
 'use client'
+import React from 'react'
 import { useDraggable, useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import type { Cell } from '../types'
@@ -42,7 +43,10 @@ export default function GridCell({ cell, onDoubleClick, isHint }: Props) {
     setDragRef(el)
   }
 
-  const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined
+  // 占用格子是拖拽源：必须 touch-action:none，否则 Android 浏览器劫持触摸滚动
+  const baseStyle: React.CSSProperties = isEmpty ? {} : { touchAction: 'none' }
+  const dragStyle = transform ? { transform: CSS.Translate.toString(transform) } : {}
+  const style = { ...baseStyle, ...dragStyle }
 
   return (
     <div
@@ -53,7 +57,7 @@ export default function GridCell({ cell, onDoubleClick, isHint }: Props) {
       className={[
         // base: square, centered, rounded, no-select
         'relative aspect-square rounded-2xl flex flex-col items-center justify-center select-none',
-        'transition-all duration-150 touch-manipulation',
+        `transition-all duration-150 ${isEmpty ? 'touch-pan-y' : 'touch-none'}`,
         // empty vs occupied
         isEmpty
           ? [
