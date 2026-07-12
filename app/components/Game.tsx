@@ -12,11 +12,16 @@ import DifficultyPicker from './DifficultyPicker'
 import WaveShop from './WaveShop'
 import AchievementToast from './AchievementToast'
 import BadgeGallery from './BadgeGallery'
+import MusicReward from './MusicReward'
+import AntiAddictionOverlay from './AntiAddictionOverlay'
 import { lookupSynthesis } from '../data/words'
 import { dealHand, refillTiles, type LevelRange, LEVEL_INFO } from '../data/levels'
 import { getRandomShopItems, type ShopItem } from '../data/shopItems'
 import { useGameLoop } from '../hooks/useGameLoop'
+import { useAntiAddiction } from '../hooks/useAntiAddiction'
 import { playSynthesis, playPlace, playReturn, playInvalid } from '../utils/sounds'
+import { FEATURES } from '../config/features'
+import { type Song, pickRandomSong } from '../data/songs'
 import {
   type Achievement,
   trackHeroSynthesized,
@@ -26,7 +31,7 @@ import {
 
 const ROWS = 3
 const COLS = 5
-const HINT_DELAY_MS = 10_000  // 10s of inactivity triggers hint
+const HINT_DELAY_MS = 10_000
 
 function makeEmptyCells(): Record<string, Cell> {
   const cells: Record<string, Cell> = {}
@@ -44,19 +49,16 @@ function overlayTextSize(value: string) {
   return 'text-xl sm:text-3xl'
 }
 
-// Returns pair of IDs [a, b] that can be synthesized, or null
 function findHintPair(
   hand: HandItem[],
   cells: Record<string, Cell>,
 ): [string, string] | null {
-  // hand × hand
   for (const a of hand) {
     for (const b of hand) {
-      if (a.id >= b.id) continue  // avoid duplicates
+      if (a.id >= b.id) continue
       if (lookupSynthesis(a.value, b.value)) return [a.id, b.id]
     }
   }
-  // hand × non-hero cell
   for (const a of hand) {
     for (const cell of Object.values(cells)) {
       if (cell.type === 'empty' || cell.type === 'hero') continue
@@ -75,12 +77,17 @@ export default function Game() {
   const [activeId, setActiveId]     = useState<string | null>(null)
   const [hintIds, setHintIds]       = useState<Set<string>>(new Set())
   const [pendingToasts, setPendingToasts] = useState<Achievement[]>([])
+  const [shopItems, setShopItems]   = useState<ShopItem[] | null>(null)
+  // 激励音乐（每局最多触发 2 次，每波只触发 1 次）
+  const [musicSong, setMusicSong]   = useState<Song | null>(null)
+  const lastMusicWaveRef            = useRef(-1)
+  const lastSongIdRef               = useRef(-1)
+  const musicRewardCountRef         = useRef(0)  // 全局计数，上限 2
   const [loopState, setLoopState]   = useState<GameLoopState>({
     enemies: [], bullets: [], baseHp: 10, wave: 0,
     heroTick: 0, spawnTick: 0, phase: 'idle',
     rapidFireTicks: 0, shieldHp: 0, slowTicks: 0,
   })
-  const [shopItems, setShopItems]   = useState<ShopItem[] | null>(null)
 
   const cellsRef = useRef(cells)
   cellsRef.current = cells
@@ -90,11 +97,53 @@ export default function Game() {
 
   const loop = useGameLoop(getCells, setLoopState)
 
-  // Track last meaningful player action time for hint system
+  const isPlaying = loopState.phase === 'playing'
+  const isPaused  = loopState.phase === 'paused'
+  const isOver    = loopState.phase === 'over'
+  const isShop    = loopState.phase === 'shop'
+
+  // ── 防沉溺 ────────────────────────────────────────────────────
+  const antiAdd = useAntiAddiction(isPlaying)
+
+  // 达到 break 阈值时自动暂停
+  useEffect(() => {
+    if (antiAdd.showBreak && isPlaying) loop.pause()
+  }, [antiAdd.showBreak, isPlaying])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 激励音乐：HP 降至临界值时触发 ───────────────────────────
+  useEffect(() => {
+    if (!FEATURES.musicReward) return
+    if (loopState.phase !== 'playing') return
+    if (loopState.baseHp > FEATURES.musicCriticalHp) return
+    if (lastMusicWaveRef.current === loopState.wave) return   // 本波已触发过
+    if (musicRewardCountRef.current >= 2) return              // 全局上限 2 次
+    lastMusicWaveRef.current = loopState.wave
+    musicRewardCountRef.current++
+    loop.pause()
+    const song = pickRandomSong(lastSongIdRef.current)
+    lastSongIdRef.current = song.id
+    setMusicSong(song)
+  }, [loopState.baseHp, loopState.phase, loopState.wave])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handleMusicClaim() {
+    setMusicSong(null)
+    loop.applyEffect(s => { s.baseHp = Math.min(10, s.baseHp + 3) })
+    loop.resume()
+  }
+
+  // ── 波次商店 ─────────────────────────────────────────────────
+  const lastShopWaveRef = useRef(-1)
+  useEffect(() => {
+    if (loopState.phase === 'shop' && lastShopWaveRef.current !== loopState.wave) {
+      lastShopWaveRef.current = loopState.wave
+      setShopItems(getRandomShopItems(3))
+    }
+  }, [loopState.phase, loopState.wave])
+
+  // ── 提示系统 ─────────────────────────────────────────────────
   const lastActionRef = useRef(Date.now())
   function bumpAction() { lastActionRef.current = Date.now(); setHintIds(new Set()) }
 
-  // Hint system: after HINT_DELAY_MS inactivity, highlight a valid synthesis pair
   useEffect(() => {
     const iv = setInterval(() => {
       if (Date.now() - lastActionRef.current < HINT_DELAY_MS) return
@@ -104,16 +153,6 @@ export default function Game() {
     return () => clearInterval(iv)
   }, [])
 
-  // Open wave shop when phase becomes 'shop'
-  const lastShopWaveRef = useRef(-1)
-  useEffect(() => {
-    if (loopState.phase === 'shop' && lastShopWaveRef.current !== loopState.wave) {
-      lastShopWaveRef.current = loopState.wave
-      setShopItems(getRandomShopItems(3))
-    }
-  }, [loopState.phase, loopState.wave])
-
-  // Queue newly unlocked achievements as toasts
   function queueAchievements(gained: Achievement[]) {
     if (gained.length === 0) return
     setPendingToasts(p => [...p, ...gained])
@@ -149,29 +188,22 @@ export default function Game() {
 
     if (sourceHand) {
       if (targetCell.type === 'empty') {
-        bumpAction()
-        playPlace()
+        bumpAction(); playPlace()
         setHand(p => p.filter(h => h.id !== sourceId))
         setCells(p => ({ ...p, [targetId]: { id: targetId, type: sourceHand.type, value: sourceHand.value } }))
       } else if (targetCell.type !== 'hero') {
         const hit = lookupSynthesis(sourceHand.value, targetCell.value)
         if (hit) {
-          bumpAction()
-          playSynthesis()
+          bumpAction(); playSynthesis()
           queueAchievements(trackHeroSynthesized(1))
           setHand(p => [...p.filter(h => h.id !== sourceId), ...refillTiles(level, 2)])
           setCells(p => ({ ...p, [targetId]: { id: targetId, type: 'hero', value: hit.word, emoji: hit.emoji } }))
         } else { playInvalid() }
       }
     } else if (sourceCell && sourceCell.type !== 'empty') {
-      // V4: hero-on-hero merge → upgrade tier
-      if (
-        sourceCell.type === 'hero' && targetCell.type === 'hero' &&
-        sourceCell.value === targetCell.value
-      ) {
+      if (sourceCell.type === 'hero' && targetCell.type === 'hero' && sourceCell.value === targetCell.value) {
         const newTier = Math.min(3, (sourceCell.tier ?? 1) + (targetCell.tier ?? 1))
-        bumpAction()
-        playSynthesis()
+        bumpAction(); playSynthesis()
         queueAchievements(trackHeroSynthesized(newTier))
         setCells(p => ({
           ...p,
@@ -180,10 +212,8 @@ export default function Game() {
         }))
         return
       }
-
       if (targetCell.type === 'empty') {
-        bumpAction()
-        playPlace()
+        bumpAction(); playPlace()
         setCells(p => ({
           ...p,
           [sourceId]: { id: sourceId, type: 'empty', value: '' },
@@ -192,8 +222,7 @@ export default function Game() {
       } else if (targetCell.type !== 'hero' && sourceCell.type !== 'hero') {
         const hit = lookupSynthesis(sourceCell.value, targetCell.value)
         if (hit) {
-          bumpAction()
-          playSynthesis()
+          bumpAction(); playSynthesis()
           queueAchievements(trackHeroSynthesized(1))
           setHand(p => [...p, ...refillTiles(level, 2)])
           setCells(p => ({
@@ -202,8 +231,7 @@ export default function Game() {
             [targetId]: { id: targetId, type: 'hero', value: hit.word, emoji: hit.emoji },
           }))
         } else {
-          bumpAction()
-          playPlace()
+          bumpAction(); playPlace()
           setCells(p => ({
             ...p,
             [sourceId]: { ...targetCell, id: sourceId },
@@ -216,21 +244,13 @@ export default function Game() {
 
   function handleShopSelect(item: ShopItem) {
     setShopItems(null)
-    // Track wave completion achievement when player closes the shop
     queueAchievements(trackWaveComplete(loopState.wave))
-    if (item.id === 'heal') {
-      loop.applyEffect(s => { s.baseHp = Math.min(10, s.baseHp + 3) })
-    } else if (item.id === 'redraw') {
-      setHand(dealHand(level))
-    } else if (item.id === 'add_tiles') {
-      setHand(p => [...p, ...refillTiles(level, 5)])
-    } else if (item.id === 'rapid') {
-      loop.applyEffect(s => { s.rapidFireTicks = 400 })
-    } else if (item.id === 'shield') {
-      loop.applyEffect(s => { s.shieldHp = (s.shieldHp ?? 0) + 3 })
-    } else if (item.id === 'slow') {
-      loop.applyEffect(s => { s.slowTicks = 300 })
-    }
+    if (item.id === 'heal')       loop.applyEffect(s => { s.baseHp = Math.min(10, s.baseHp + 3) })
+    else if (item.id === 'redraw')    setHand(dealHand(level))
+    else if (item.id === 'add_tiles') setHand(p => [...p, ...refillTiles(level, 5)])
+    else if (item.id === 'rapid')  loop.applyEffect(s => { s.rapidFireTicks = 400 })
+    else if (item.id === 'shield') loop.applyEffect(s => { s.shieldHp = (s.shieldHp ?? 0) + 3 })
+    else if (item.id === 'slow')   loop.applyEffect(s => { s.slowTicks = 300 })
     bumpAction()
     loop.resume()
   }
@@ -238,8 +258,7 @@ export default function Game() {
   function handleRemoveFromCell(cellId: string) {
     const cell = cells[cellId]
     if (cell.type === 'empty' || cell.type === 'hero') return
-    bumpAction()
-    playReturn()
+    bumpAction(); playReturn()
     setHand(p => [...p, { id: `h-${Date.now()}`, type: cell.type as 'letter' | 'rime', value: cell.value }])
     setCells(p => ({ ...p, [cellId]: { id: cellId, type: 'empty', value: '' } }))
   }
@@ -249,7 +268,10 @@ export default function Game() {
     setCells(makeEmptyCells())
     setHand(dealHand(level))
     setShopItems(null)
+    setMusicSong(null)
     lastShopWaveRef.current = -1
+    lastMusicWaveRef.current = -1
+    musicRewardCountRef.current = 0
     bumpAction()
   }
 
@@ -259,18 +281,17 @@ export default function Game() {
     setCells(makeEmptyCells())
     setHand(dealHand(lv))
     setShopItems(null)
+    setMusicSong(null)
     lastShopWaveRef.current = -1
+    lastMusicWaveRef.current = -1
+    musicRewardCountRef.current = 0
     bumpAction()
     if (lv === 5) queueAchievements(trackLevel5())
   }
 
-  const active     = getActive()
-  const heroCount  = Object.values(cells).filter(c => c.type === 'hero').length
-  const lvInfo     = LEVEL_INFO[level]
-  const isPlaying  = loopState.phase === 'playing'
-  const isPaused   = loopState.phase === 'paused'
-  const isOver     = loopState.phase === 'over'
-  const isShop     = loopState.phase === 'shop'
+  const active    = getActive()
+  const heroCount = Object.values(cells).filter(c => c.type === 'hero').length
+  const lvInfo    = LEVEL_INFO[level]
 
   return (
     <div
@@ -287,20 +308,16 @@ export default function Game() {
             {loopState.shieldHp > 0 && <span className="ml-1 bg-blue-400 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">🛡️{loopState.shieldHp}</span>}
             {loopState.rapidFireTicks > 0 && <span className="ml-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">⚡速射</span>}
             {loopState.slowTicks > 0 && <span className="ml-1 bg-cyan-400 text-cyan-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">❄️冰冻</span>}
+            {FEATURES.antiAddiction && antiAdd.playMin > 0 && (
+              <span className="ml-1 text-sky-300 text-[10px]">⏱{antiAdd.playMin}m</span>
+            )}
           </p>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={() => setShowBadges(true)}
-            className="text-xs text-white/80 hover:text-white border border-white/30 hover:border-white/70 rounded-xl px-2.5 py-1.5 transition-all"
-            title="功勋徽章"
-          >
+          <button onClick={() => setShowBadges(true)} className="text-xs text-white/80 hover:text-white border border-white/30 hover:border-white/70 rounded-xl px-2.5 py-1.5 transition-all" title="功勋徽章">
             🏆
           </button>
-          <button
-            onClick={() => setShowPicker(true)}
-            className="text-xs text-white/80 hover:text-white border border-white/30 hover:border-white/70 rounded-xl px-3 py-1.5 transition-all"
-          >
+          <button onClick={() => setShowPicker(true)} className="text-xs text-white/80 hover:text-white border border-white/30 hover:border-white/70 rounded-xl px-3 py-1.5 transition-all">
             {lvInfo.emoji} 词库
           </button>
         </div>
@@ -325,16 +342,13 @@ export default function Game() {
               })
             )}
           </div>
-
-          {/* 塔防覆盖层（敌人 + 子弹 + 状态） */}
           {(isPlaying || isPaused || isOver || isShop) && (
             <BattleOverlay loop={loopState} />
           )}
         </section>
 
-        {/* 塔防控制栏 */}
+        {/* 控制栏 */}
         <div className="flex gap-2 w-full max-w-sm sm:max-w-lg">
-          {/* 基地 HP */}
           <div className="flex items-center gap-1 bg-white/20 rounded-2xl px-3 py-2 flex-1">
             <span className="text-lg">🏰</span>
             <div className="flex gap-0.5">
@@ -345,15 +359,15 @@ export default function Game() {
                     i < loopState.shieldHp
                       ? 'bg-blue-300'
                       : i < loopState.baseHp + loopState.shieldHp
-                      ? 'bg-green-300'
+                      ? loopState.baseHp <= FEATURES.musicCriticalHp
+                        ? 'bg-red-400 animate-pulse'
+                        : 'bg-green-300'
                       : 'bg-white/20'
                   }`}
                 />
               ))}
             </div>
           </div>
-
-          {/* 开始 / 暂停 / 继续 */}
           {!isPlaying && !isOver && !isShop && (
             <button
               onClick={isPaused ? loop.resume : loop.start}
@@ -368,21 +382,17 @@ export default function Game() {
               ⏸ 暂停
             </button>
           )}
-
-          {/* Wave 计数 */}
           <div className="bg-white/20 rounded-2xl px-3 py-2 text-white text-xs font-bold text-center min-w-[4rem]">
             <div className="text-lg leading-none">⚔️</div>
             <div>Wave {loopState.wave + 1}</div>
           </div>
         </div>
 
-        {/* Hand area */}
+        {/* 手牌区 */}
         <section className="bg-white/20 backdrop-blur-sm rounded-3xl p-3 sm:p-5 shadow-xl w-full max-w-sm sm:max-w-lg">
           <p className="text-[10px] text-sky-100 text-center mb-3 uppercase tracking-widest">
             手牌区 · 拖入战场
-            {hintIds.size > 0 && (
-              <span className="ml-2 text-amber-300 animate-pulse">💡 提示闪烁</span>
-            )}
+            {hintIds.size > 0 && <span className="ml-2 text-amber-300 animate-pulse">💡 提示闪烁</span>}
           </p>
           <div className="flex flex-wrap gap-2 justify-center">
             {hand.map(item => (
@@ -405,41 +415,47 @@ export default function Game() {
         </DragOverlay>
       </DndContext>
 
-      {/* Tips + Reset */}
       <footer className="flex flex-col items-center gap-2 w-full max-w-sm sm:max-w-lg">
         <p className="text-xs text-sky-200 text-center leading-relaxed">
           💡 合成英雄后点 ▶ 开战 &nbsp;|&nbsp; 双击格子退回手牌 &nbsp;|&nbsp; 同名英雄叠加升级 ⭐
         </p>
-        <button
-          onClick={handleReset}
-          className="text-xs text-white/60 hover:text-white border border-white/20 hover:border-white/50 rounded-full px-5 py-1.5 transition-all"
-        >
+        <button onClick={handleReset} className="text-xs text-white/60 hover:text-white border border-white/20 hover:border-white/50 rounded-full px-5 py-1.5 transition-all">
           重新开始
         </button>
       </footer>
 
-      {/* 难度选择弹窗 */}
+      {/* ── 弹窗层 ──────────────────────────────────────────────── */}
+
       {showPicker && (
-        <DifficultyPicker
-          value={level}
-          onChange={handleLevelChange}
-          onClose={() => setShowPicker(false)}
-        />
+        <DifficultyPicker value={level} onChange={handleLevelChange} onClose={() => setShowPicker(false)} />
       )}
 
-      {/* 波次商店弹窗 */}
       {isShop && shopItems && (
-        <WaveShop
-          wave={loopState.wave}
-          items={shopItems}
-          onSelect={handleShopSelect}
-        />
+        <WaveShop wave={loopState.wave} items={shopItems} onSelect={handleShopSelect} />
       )}
 
-      {/* 功勋徽章弹窗 */}
       {showBadges && <BadgeGallery onClose={() => setShowBadges(false)} />}
 
-      {/* 成就 Toast（先进先出队列） */}
+      {/* 激励音乐（HP 危急时） */}
+      {FEATURES.musicReward && musicSong && (
+        <MusicReward song={musicSong} onClaim={handleMusicClaim} />
+      )}
+
+      {/* 防沉溺提示条 */}
+      {antiAdd.showWarn && (
+        <AntiAddictionOverlay playMin={antiAdd.playMin} mode="warn" onContinue={antiAdd.dismissWarn} />
+      )}
+
+      {/* 防沉溺建议休息（全屏） */}
+      {antiAdd.showBreak && (
+        <AntiAddictionOverlay
+          playMin={antiAdd.playMin}
+          mode="break"
+          onContinue={() => { antiAdd.dismissBreak(); if (isPaused) loop.resume() }}
+        />
+      )}
+
+      {/* 成就 Toast */}
       {pendingToasts[0] && (
         <AchievementToast
           key={pendingToasts[0].id}
