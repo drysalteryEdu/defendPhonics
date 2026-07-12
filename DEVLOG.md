@@ -317,10 +317,66 @@ create table achievements (
 
 ---
 
+## v0.3.0 — 2026-07-12
+
+### 本版本完成功能
+
+#### 1. 细粒度单元选择（Gemini 实现）
+- `levels.ts` 重构：40 个牛津自然拼读单元（5册 × 8单元），每单元有 letters / rimes 配置
+- `DifficultyPicker` 升级为**两级导航**：
+  - 第一级：5 本书卡片 + 进度条，手机一屏显示不拥挤
+  - 第二级：← 返回、8 个单元逐一勾选（☑/☐ 大按钮）、全选/全不选
+  - 底部全局已选计数；至少选 1 个单元的校验
+- `dealHand()` 升级：根据选中单元动态计算可合成字母/韵脚池，不再用固定 SEED_PAIRS
+- `words.ts` 补全 Magic E（a_e / i_e / o_e / u_e）词条及 Ending Blends
+
+#### 2. Supabase 操作日志（Gemini 实现）
+- `app/utils/supabase.ts`：操作日志模块
+  - 无 key 时降级到 `localStorage`（最近 200 条），游戏绝不崩溃
+  - 生成持久化 `session_id`（本设备唯一）
+  - 记录事件：`game_start` / `place_tile` / `synthesize_hero` / `upgrade_hero` / `invalid_synthesis` / `shop_select` / `return_tile` / `game_reset` / `wave_complete`
+- `docs/supabase-setup.sql`：建表 + RLS + pg_cron 6 个月自动清理 SQL
+
+**Supabase 接入方法**（填写 Vercel 环境变量或本地 `.env.local`）：
+```
+NEXT_PUBLIC_SUPABASE_URL=你的项目地址
+NEXT_PUBLIC_SUPABASE_ANON_KEY=你的匿名密钥
+```
+然后在 Supabase Dashboard → SQL Editor 执行 `docs/supabase-setup.sql`。
+
+**6 个月日志保留**（pg_cron，已含在 setup SQL 中）：
+```sql
+SELECT cron.schedule('phonics-log-cleanup-6m', '0 3 * * *',
+  $$DELETE FROM phonics_defend_logs WHERE client_time < NOW() - INTERVAL '6 months';$$
+);
+```
+
+#### 3. 自然拼读语音（Gemini 实现 + 本版修复）
+- `app/utils/phonicsAudio.ts`：基于 Web Speech API
+  - 合成英雄时：Onset → Rime → 完整词 三段发音
+  - 放置字母时：字母名 → 拼读音
+- **移动端修复（本次）**：
+  - 改用 `onend` 链式调用（Android 多条 `speak()` 入队常被静默丢弃）
+  - `cancel()` 后延 50ms 再 speak（iOS `cancel()` 是异步的，立即 speak 第一句被吞）
+  - `pickEnglishVoice()` 显式选英文声道（修复 MIUI/小米浏览器默认用中文声道）
+
+#### 4. 已知问题 & 下版计划
+
+| 问题 | 状态 |
+|------|------|
+| 手机端 Web Speech API 支持率约 70%（微信浏览器不支持）| 待做降级文字提示 |
+| 地图路径规划（赵云式弯曲路径 + 攻击距离）| v0.4 分阶段实现 |
+| Supabase 通关日志分析（有真实用户数据上传）| 需提供 Supabase 凭据后可查询分析 |
+
+---
+
 ## 版本记录
 
 | 版本 | 日期 | 主要内容 |
 |------|------|---------|
 | v0.1.0 | 2026-07-11 | 项目初始化：3×5 网格 + 手牌拖拽 + Level 2 合成字典 + H5 适配 |
 | v0.1.1 | 2026-07-11 | 接入 Web Audio MIDI 音效（合成/放置/退回/无效）+ 用户手册 + 开发日志完善 |
-| v0.2.0 | 2026-07-12 | V3难度选择（5档词汇范围 Book1~1-5）+ V2塔防Game Loop（3行独立赛道，20fps，波次递增）+ 远程部署至 Vercel |
+| v0.2.0 | 2026-07-12 | 5档词汇范围选择 + 塔防 Game Loop（3行赛道，20fps）+ Vercel 部署 |
+| v0.3.0 | 2026-07-12 | 40单元细粒度选择 + Supabase 日志 + 拼读语音 + 功勋系统 + 道具商店 + 防沉溺 + 安卓拖拽修复 + 移动端词库UI重构 |
+
+
