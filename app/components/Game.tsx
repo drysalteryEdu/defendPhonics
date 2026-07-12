@@ -15,11 +15,13 @@ import BadgeGallery from './BadgeGallery'
 import MusicReward from './MusicReward'
 import AntiAddictionOverlay from './AntiAddictionOverlay'
 import { lookupSynthesis } from '../data/words'
-import { dealHand, refillTiles, type LevelRange, LEVEL_INFO } from '../data/levels'
+import { dealHand, refillTiles, BOOK_INFO, isPurelyLetters } from '../data/levels'
 import { getRandomShopItems, type ShopItem } from '../data/shopItems'
 import { useGameLoop } from '../hooks/useGameLoop'
 import { useAntiAddiction } from '../hooks/useAntiAddiction'
 import { playSynthesis, playPlace, playReturn, playInvalid } from '../utils/sounds'
+import { speakPhonics, speakLetter } from '../utils/phonicsAudio'
+import { logEvent } from '../utils/supabase'
 import { FEATURES } from '../config/features'
 import { type Song, pickRandomSong } from '../data/songs'
 import {
@@ -65,13 +67,18 @@ function findHintPair(hand: HandItem[], cells: Record<string, Cell>): [string, s
   return null
 }
 
+const DEFAULT_SELECTION = {
+  '1-1': true, '1-2': true, '1-3': true, '1-4': true,
+  '2-1': true, '2-2': true
+}
+
 export default function Game() {
-  const [level, setLevel]             = useState<LevelRange>(2)
+  const [selection, setSelection]     = useState<Record<string, boolean>>(() => DEFAULT_SELECTION)
   const [showPicker, setShowPicker]   = useState(false)
   const [showBadges, setShowBadges]   = useState(false)
   const [hintMode, setHintMode]       = useState(false)   // 提示模式，默认关闭
   const [cells, setCells]             = useState(makeEmptyCells)
-  const [hand, setHand]               = useState<HandItem[]>(() => dealHand(2))
+  const [hand, setHand]               = useState<HandItem[]>(() => dealHand(DEFAULT_SELECTION))
   const [activeId, setActiveId]       = useState<string | null>(null)
   const [hintIds, setHintIds]         = useState<Set<string>>(new Set())
   const [pendingToasts, setPendingToasts] = useState<Achievement[]>([])
@@ -90,9 +97,21 @@ export default function Game() {
   // Refs 供 game loop / hint interval 读取最新值（避免 stale closure）
   const cellsRef = useRef(cells); cellsRef.current = cells
   const handRef  = useRef(hand);  handRef.current  = hand
-  const levelRef = useRef(level); levelRef.current = level
+  const selectionRef = useRef(selection); selectionRef.current = selection
+  
   const getCells  = useCallback(() => cellsRef.current, [])
-  const getLevel  = useCallback(() => levelRef.current, [])
+  
+  const getHighestBookNum = (sel: Record<string, boolean>) => {
+    let maxB = 1
+    Object.keys(sel).forEach(k => {
+      if (sel[k]) {
+        const b = Number(k.split('-')[0])
+        if (b > maxB) maxB = b
+      }
+    })
+    return maxB
+  }
+  const getLevel  = useCallback(() => getHighestBookNum(selectionRef.current), [])
 
   const loop = useGameLoop(getCells, setLoopState, getLevel)
 
@@ -126,6 +145,7 @@ export default function Game() {
     setMusicSong(null)
     loop.applyEffect(s => { s.baseHp = Math.min(10, s.baseHp + 3) })
     loop.resume()
+    logEvent('music_claim', loopState.wave, selectionRef.current, { bonus_hp: 3 })
   }
 
   // ── 波次商店 ───────────────────────────────────────────────────
@@ -136,6 +156,17 @@ export default function Game() {
       setShopItems(getRandomShopItems(FEATURES.shopItemCount))
     }
   }, [loopState.phase, loopState.wave])
+
+  // ── Supabase operation log state-change hooks ─────────────────
+  useEffect(() => {
+    if (loopState.phase === 'over') {
+      logEvent('game_over', loopState.wave, selectionRef.current, { final_wave: loopState.wave, baseHp: loopState.baseHp })
+    } else if (loopState.phase === 'playing') {
+      logEvent('game_start', loopState.wave, selectionRef.current, { wave: loopState.wave })
+    } else if (loopState.phase === 'shop') {
+      logEvent('wave_complete', loopState.wave, selectionRef.current, { wave: loopState.wave, baseHp: loopState.baseHp })
+    }
+  }, [loopState.phase])
 
   // ── 提示系统（只在 hintMode 开启时运行）────────────────────────
   const lastActionRef = useRef(Date.now())
@@ -189,25 +220,36 @@ export default function Game() {
         bumpAction(); playPlace()
         setHand(p => p.filter(h => h.id !== sourceId))
         setCells(p => ({ ...p, [targetId]: { id: targetId, type: sourceHand.type, value: sourceHand.value } }))
+        logEvent('place_tile', loopState.wave, selection, { from: 'hand', type: sourceHand.type, value: sourceHand.value, cell: targetId })
+        if (sourceHand.type === 'letter') {
+          speakLetter(sourceHand.value)
+        }
       } else if (targetCell.type !== 'hero') {
         const hit = lookupSynthesis(sourceHand.value, targetCell.value)
         if (hit) {
           bumpAction(); playSynthesis()
+          speakPhonics(sourceHand.value, targetCell.value, hit.word)
           queueAchievements(trackHeroSynthesized(1))
-          setHand(p => [...p.filter(h => h.id !== sourceId), ...refillTiles(level, 2)])
+          setHand(p => [...p.filter(h => h.id !== sourceId), ...refillTiles(selection, 2)])
           setCells(p => ({ ...p, [targetId]: { id: targetId, type: 'hero', value: hit.word, emoji: hit.emoji } }))
-        } else { playInvalid() }
+          logEvent('synthesize_hero', loopState.wave, selection, { from: 'hand', letter: sourceHand.value, rime: targetCell.value, word: hit.word })
+        } else { 
+          playInvalid() 
+          logEvent('invalid_synthesis', loopState.wave, selection, { from: 'hand', val1: sourceHand.value, val2: targetCell.value })
+        }
       }
     } else if (sourceCell && sourceCell.type !== 'empty') {
       if (sourceCell.type === 'hero' && targetCell.type === 'hero' && sourceCell.value === targetCell.value) {
         const newTier = Math.min(3, (sourceCell.tier ?? 1) + (targetCell.tier ?? 1))
         bumpAction(); playSynthesis()
+        speakPhonics(sourceCell.value, '', sourceCell.value) // Repeat sound on upgrade
         queueAchievements(trackHeroSynthesized(newTier))
         setCells(p => ({
           ...p,
           [sourceId]: { id: sourceId, type: 'empty', value: '' },
           [targetId]: { ...targetCell, tier: newTier },
         }))
+        logEvent('upgrade_hero', loopState.wave, selection, { word: targetCell.value, tier: newTier })
         return
       }
       if (targetCell.type === 'empty') {
@@ -217,17 +259,20 @@ export default function Game() {
           [sourceId]: { id: sourceId, type: 'empty', value: '' },
           [targetId]: { ...sourceCell, id: targetId },
         }))
+        logEvent('move_tile', loopState.wave, selection, { from_cell: sourceId, to_cell: targetId, type: sourceCell.type, value: sourceCell.value })
       } else if (targetCell.type !== 'hero' && sourceCell.type !== 'hero') {
         const hit = lookupSynthesis(sourceCell.value, targetCell.value)
         if (hit) {
           bumpAction(); playSynthesis()
+          speakPhonics(sourceCell.value, targetCell.value, hit.word)
           queueAchievements(trackHeroSynthesized(1))
-          setHand(p => [...p, ...refillTiles(level, 2)])
+          setHand(p => [...p, ...refillTiles(selection, 2)])
           setCells(p => ({
             ...p,
             [sourceId]: { id: sourceId, type: 'empty', value: '' },
             [targetId]: { id: targetId, type: 'hero', value: hit.word, emoji: hit.emoji },
           }))
+          logEvent('synthesize_hero', loopState.wave, selection, { from: 'board', letter: sourceCell.value, rime: targetCell.value, word: hit.word })
         } else {
           bumpAction(); playPlace()
           setCells(p => ({
@@ -235,6 +280,7 @@ export default function Game() {
             [sourceId]: { ...targetCell, id: sourceId },
             [targetId]: { ...sourceCell, id: targetId },
           }))
+          logEvent('swap_tiles', loopState.wave, selection, { cell1: sourceId, cell2: targetId })
         }
       }
     }
@@ -244,6 +290,7 @@ export default function Game() {
     setShopItems(null)
     queueAchievements(trackWaveComplete(loopState.wave))
     bumpAction()
+    logEvent('shop_select', loopState.wave, selection, { item_id: item.id, item_label: item.label })
 
     if (item.id === 'heal') {
       loop.applyEffect(s => { s.baseHp = Math.min(10, s.baseHp + 3) })
@@ -256,12 +303,12 @@ export default function Game() {
         // 清空战场英雄 + 清扫残余敌人 + 补充 14 张牌
         loop.applyEffect(s => { s.enemies = []; s.bullets = [] })
         setCells(makeEmptyCells())
-        setHand(dealHand(level, 14))
+        setHand(dealHand(selection, 14))
       } else {
-        setHand(dealHand(level))
+        setHand(dealHand(selection))
       }
     } else if (item.id === 'add_tiles') {
-      setHand(p => [...p, ...refillTiles(level, 5)])
+      setHand(p => [...p, ...refillTiles(selection, 5)])
     } else if (item.id === 'rapid') {
       loop.applyEffect(s => { s.rapidFireTicks = 400 })
     } else if (item.id === 'shield') {
@@ -279,29 +326,36 @@ export default function Game() {
     bumpAction(); playReturn()
     setHand(p => [...p, { id: `h-${Date.now()}`, type: cell.type as 'letter' | 'rime', value: cell.value }])
     setCells(p => ({ ...p, [cellId]: { id: cellId, type: 'empty', value: '' } }))
+    logEvent('return_tile', loopState.wave, selection, { cell: cellId, type: cell.type, value: cell.value })
   }
 
   function handleReset() {
     loop.reset()
     setCells(makeEmptyCells())
-    setHand(dealHand(level))
+    setHand(dealHand(selection))
     setShopItems(null); setMusicSong(null)
     lastShopWaveRef.current = -1
     lastMusicWaveRef.current = -1
     musicRewardCountRef.current = 0
     bumpAction()
+    logEvent('game_reset', 0, selection, {})
   }
 
-  function handleLevelChange(lv: LevelRange) {
-    setLevel(lv); loop.reset()
+  function handleSelectionChange(newSelection: Record<string, boolean>) {
+    setSelection(newSelection)
+    loop.reset()
     setCells(makeEmptyCells())
-    setHand(dealHand(lv))
+    setHand(dealHand(newSelection))
     setShopItems(null); setMusicSong(null)
     lastShopWaveRef.current = -1
     lastMusicWaveRef.current = -1
     musicRewardCountRef.current = 0
     bumpAction()
-    if (lv === 5) queueAchievements(trackLevel5())
+    logEvent('selection_change', 0, newSelection, {})
+    
+    // Track Level 5 achievement if any Book 5 unit is selected
+    const hasBook5 = Object.keys(newSelection).some(k => newSelection[k] && k.startsWith('5-'))
+    if (hasBook5) queueAchievements(trackLevel5())
   }
 
   // 如果 redrawClearsGrid，展示时修改描述
@@ -313,7 +367,20 @@ export default function Game() {
 
   const active    = getActive()
   const heroCount = Object.values(cells).filter(c => c.type === 'hero').length
-  const lvInfo    = LEVEL_INFO[level]
+  
+  // Custom selection summary format
+  const getSelectionSummary = (sel: Record<string, boolean>) => {
+    const books = new Set<number>()
+    Object.keys(sel).forEach(k => {
+      if (sel[k]) books.add(Number(k.split('-')[0]))
+    })
+    const arr = Array.from(books).sort()
+    if (arr.length === 0) return { label: '空', emoji: '⚙️' }
+    if (arr.length === 1) return { label: `Book ${arr[0]}`, emoji: BOOK_INFO[arr[0]]?.emoji || '📚' }
+    return { label: `Book ${arr.join('+')}`, emoji: '📚' }
+  }
+  const selSummary = getSelectionSummary(selection)
+  const selectedUnitCount = Object.values(selection).filter(Boolean).length
 
   return (
     <div
@@ -325,7 +392,7 @@ export default function Game() {
         <div>
           <h1 className="text-2xl sm:text-3xl font-black text-white drop-shadow-lg tracking-wide">🛡️ 拼读保卫战</h1>
           <p className="text-sky-100 text-xs mt-0.5 flex flex-wrap items-center gap-1">
-            {lvInfo.emoji} {lvInfo.label}
+            {selSummary.emoji} {selSummary.label} ({selectedUnitCount} 单元)
             {heroCount > 0 && <span className="bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{heroCount} 英雄</span>}
             {loopState.shieldHp > 0 && <span className="bg-blue-400 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">🛡️{loopState.shieldHp}</span>}
             {loopState.rapidFireTicks > 0 && <span className="bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">⚡速射</span>}
@@ -351,7 +418,7 @@ export default function Game() {
             🏆
           </button>
           <button onClick={() => setShowPicker(true)} className="text-xs text-white/80 hover:text-white border border-white/30 hover:border-white/70 rounded-xl px-3 py-1.5 transition-all">
-            {lvInfo.emoji} 词库
+            {selSummary.emoji} 词库
           </button>
         </div>
       </header>
@@ -457,7 +524,7 @@ export default function Game() {
       </footer>
 
       {/* ── 弹窗层 ────────────────────────────────────────────── */}
-      {showPicker && <DifficultyPicker value={level} onChange={handleLevelChange} onClose={() => setShowPicker(false)} />}
+      {showPicker && <DifficultyPicker value={selection} onChange={handleSelectionChange} onClose={() => setShowPicker(false)} />}
 
       {isShop && enrichedShopItems && (
         <WaveShop wave={loopState.wave} items={enrichedShopItems} onSelect={handleShopSelect} />

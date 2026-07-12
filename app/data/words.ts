@@ -1,5 +1,5 @@
 // 合成字典：letter + rime → word + emoji
-// key 格式：letter+rime （字母块值 + '+' + 词根块值，词根必须以 '-' 开头）
+// key 格式：letter+rime （字母块值 + '+' + 词根块值，词根可以以 '-' 开头，或以 '_e' 结尾）
 const SYNTHESIS_MAP: Record<string, { word: string; emoji: string }> = {
   // ── Level 2: Short Vowels CVC ────────────────────────────────────
   // -am family
@@ -107,7 +107,26 @@ const SYNTHESIS_MAP: Record<string, { word: string; emoji: string }> = {
   'n+-ut': { word: 'nut',  emoji: '🥜' },
   'b+-ut': { word: 'but',  emoji: '↩️' },
 
-  // ── Level 3: Vowel Digraphs (-ee / -ea / -ay / -ow / -igh) ───────
+  // ── Level 3: Vowel Digraphs & Magic E ─────────────────────────────
+  // Magic E (a_e, i_e, o_e, u_e)
+  'c+a_e': { word: 'cake', emoji: '🎂' },
+  'b+a_e': { word: 'bake', emoji: '🍞' },
+  'g+a_e': { word: 'game', emoji: '🎮' },
+  'w+a_e': { word: 'wave', emoji: '👋' },
+  'l+a_e': { word: 'late', emoji: '⏰' },
+  'n+a_e': { word: 'name', emoji: '🏷️' },
+  'b+i_e': { word: 'bike', emoji: '🚲' },
+  'k+i_e': { word: 'kite', emoji: '🪁' },
+  'f+i_e': { word: 'five', emoji: '5️⃣' },
+  'd+i_e': { word: 'dive', emoji: '🤿' },
+  'b+o_e': { word: 'bone', emoji: '🦴' },
+  'c+o_e': { word: 'cone', emoji: '🍦' },
+  'h+o_e': { word: 'home', emoji: '🏠' },
+  'r+o_e': { word: 'rope', emoji: '🪢' },
+  'c+u_e': { word: 'cube', emoji: '🧊' },
+  't+u_e': { word: 'tube', emoji: '🧪' },
+  'm+u_e': { word: 'mule', emoji: '🫏' },
+
   // -ee family
   'b+-ee':  { word: 'bee',  emoji: '🐝' },
   'f+-ee':  { word: 'fee',  emoji: '💸' },
@@ -117,6 +136,9 @@ const SYNTHESIS_MAP: Record<string, { word: string; emoji: string }> = {
   't+-ea':  { word: 'tea',  emoji: '☕' },
   's+-ea':  { word: 'sea',  emoji: '🌊' },
   'p+-ea':  { word: 'pea',  emoji: '🟢' },
+  // -ai family
+  'r+-ai':  { word: 'rain', emoji: '🌧️' },
+  't+-ai':  { word: 'tail', emoji: '🐕' },
   // -ay family
   'b+-ay':  { word: 'bay',  emoji: '⚓' },
   'd+-ay':  { word: 'day',  emoji: '🌅' },
@@ -126,6 +148,10 @@ const SYNTHESIS_MAP: Record<string, { word: string; emoji: string }> = {
   'r+-ay':  { word: 'ray',  emoji: '☀️' },
   's+-ay':  { word: 'say',  emoji: '💬' },
   'w+-ay':  { word: 'way',  emoji: '🛣️' },
+  // -oa family
+  'b+-oa':  { word: 'boat', emoji: '⛵' },
+  'c+-oa':  { word: 'coat', emoji: '🧥' },
+  's+-oa':  { word: 'soap', emoji: '🧼' },
   // -ow family (/oʊ/ sound)
   'b+-ow':  { word: 'bow',  emoji: '🎀' },
   'l+-ow':  { word: 'low',  emoji: '⬇️' },
@@ -136,8 +162,13 @@ const SYNTHESIS_MAP: Record<string, { word: string; emoji: string }> = {
   // -igh family
   'h+-igh': { word: 'high', emoji: '🔝' },
   's+-igh': { word: 'sigh', emoji: '😔' },
+  // -y family
+  'f+-y':   { word: 'fly',  emoji: '🪰' },
+  's+-y':   { word: 'sky',  emoji: '🌌' },
+  'c+-y':   { word: 'cry',  emoji: '😢' },
+  'm+-y':   { word: 'my',   emoji: '🙋' },
 
-  // ── Level 4: Consonant Blends + Level 2 rimes ────────────────────
+  // ── Level 4: Consonant Blends + Level 2/3 rimes ───────────────────
   // sh + rimes
   'sh+-op': { word: 'shop', emoji: '🛍️' },
   'sh+-ot': { word: 'shot', emoji: '🎯' },
@@ -210,7 +241,30 @@ const SYNTHESIS_MAP: Record<string, { word: string; emoji: string }> = {
   'sl+-ow': { word: 'slow', emoji: '🐢' },
   'gr+-ow': { word: 'grow', emoji: '🌱' },
 
-  // ── Level 5: R-Controlled Vowels + Diphthongs ────────────────────
+  // L4 Ending Blends 1 (-ing, -ink, -and, -ent)
+  'r+-ing': { word: 'ring', emoji: '💍' },
+  'k+-ing': { word: 'king', emoji: '👑' },
+  's+-ing': { word: 'sing', emoji: '🎤' },
+  'b+-ank': { word: 'bank', emoji: '🏦' },
+  'p+-ink': { word: 'pink', emoji: '🩷' },
+  't+-ank': { word: 'tank', emoji: '🪖' },
+  's+-ink': { word: 'sink', emoji: '🪟' },
+  'h+-and': { word: 'hand', emoji: '✋' },
+  's+-and': { word: 'sand', emoji: '🏖️' },
+  'w+-and': { word: 'wand', emoji: '🪄' },
+  't+-ent': { word: 'tent', emoji: '⛺' },
+  's+-ent': { word: 'sent', emoji: '✉️' },
+  'w+-ent': { word: 'went', emoji: '🚶' },
+
+  // L4 Ending Blends 2 (-amp, -ask, -elt)
+  'c+-amp': { word: 'camp', emoji: '🏕️' },
+  'l+-amp': { word: 'lamp', emoji: '💡' },
+  'm+-ask': { word: 'mask', emoji: '🎭' },
+  't+-ask': { word: 'task', emoji: '📋' },
+  'b+-elt': { word: 'belt', emoji: '🎗️' },
+  'm+-elt': { word: 'melt', emoji: '🫠' },
+
+  // ── Level 5: R-Controlled Vowels & Diphthongs ─────────────────────
   // -ar family
   'c+-ar':  { word: 'car',  emoji: '🚗' },
   'b+-ar':  { word: 'bar',  emoji: '🍫' },
@@ -248,12 +302,54 @@ const SYNTHESIS_MAP: Record<string, { word: string; emoji: string }> = {
   'p+-aw':  { word: 'paw',  emoji: '🐾' },
   'r+-aw':  { word: 'raw',  emoji: '🥩' },
   's+-aw':  { word: 'saw',  emoji: '🪚' },
+
+  // Book 5 Unit 3-4 Advanced
+  'b+-all': { word: 'ball', emoji: '⚽' },
+  't+-all': { word: 'tall', emoji: '🦒' },
+  'h+-air': { word: 'hair', emoji: '💇' },
+  'c+-air': { word: 'chair', emoji: '🪑' },
+  'e+-ear': { word: 'ear',  emoji: '👂' },
+  'h+-ear': { word: 'hear', emoji: '👂' },
 }
 
 export function lookupSynthesis(valA: string, valB: string) {
-  const isRimeA = valA.startsWith('-')
+  const isRime = (v: string) => v.startsWith('-') || v.endsWith('_e')
+  const isRimeA = isRime(valA)
+  const isRimeB = isRime(valB)
+  
+  if (isRimeA && isRimeB) return null
+  if (!isRimeA && !isRimeB) return null
+  
   const letter = isRimeA ? valB : valA
   const rime = isRimeA ? valA : valB
-  if (!rime.startsWith('-')) return null
+  
   return SYNTHESIS_MAP[`${letter}+${rime}`] ?? null
+}
+
+/**
+ * Scan the dictionary to find all letters that can combine with a given rime
+ */
+export function getMatchingLettersForRime(rime: string): string[] {
+  const letters: string[] = []
+  Object.keys(SYNTHESIS_MAP).forEach(key => {
+    const [l, r] = key.split('+')
+    if (r === rime) {
+      letters.push(l)
+    }
+  })
+  return letters
+}
+
+/**
+ * Scan the dictionary to find all rimes that can combine with a given letter/blend
+ */
+export function getMatchingRimesForLetter(letter: string): string[] {
+  const rimes: string[] = []
+  Object.keys(SYNTHESIS_MAP).forEach(key => {
+    const [l, r] = key.split('+')
+    if (l === letter) {
+      rimes.push(r)
+    }
+  })
+  return rimes
 }
