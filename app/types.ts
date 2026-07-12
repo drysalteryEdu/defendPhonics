@@ -5,6 +5,7 @@ export interface Cell {
   type: CellContentType
   value: string
   emoji?: string
+  tier?: number  // 1 (default) | 2 (★★) | 3 (★★★) — hero upgrade tier
 }
 
 export interface HandItem {
@@ -36,7 +37,10 @@ export interface GameLoopState {
   bullets: Bullet[]
   baseHp: number
   wave: number
-  heroTick: number   // 用于控制英雄开火节奏
-  spawnTick: number  // 用于控制敌人生成节奏
-  phase: 'idle' | 'playing' | 'paused' | 'over'
+  heroTick: number    // 用于控制英雄开火节奏
+  spawnTick: number   // 用于控制敌人生成节奏
+  phase: 'idle' | 'playing' | 'paused' | 'shop' | 'over'
+  rapidFireTicks: number  // 速射道具倒计时（>0 时射速×2）
+  shieldHp: number        // 护盾值（先于 baseHp 吸收伤害）
+  slowTicks: number       // 冰冻道具倒计时（>0 时敌人速度×0.6）
 }

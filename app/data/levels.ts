@@ -26,10 +26,11 @@ const L2_RIMES: HandItem[] = [
 ].map((v, i) => ({ id: `l2-r-${i}`, type: 'rime', value: v }))
 
 // ── Level 3: Long Vowels / Magic E ───────────────────────────────
-// Magic E 块 (a_e / i_e / o_e / u_e) + 元音组合 (ee/ea/ai/ay)
-// 多字母合成专用：拖入魔法熔炉区组合
+// Magic E 块 (a_e / i_e / o_e / u_e) — 未来魔法熔炉专用（无 '-' 前缀）
+// 元音字母组合 (-ee/-ea/-ay/-ow/-igh) — 可直接二合成词（有 '-' 前缀）
 const L3_VOWEL_BLOCKS: HandItem[] = [
-  'a_e','i_e','o_e','u_e','ee','ea','ai','ay','oa','ow','igh',
+  'a_e','i_e','o_e','u_e',           // Magic E (future Magic Forge)
+  '-ee','-ea','-ai','-ay','-oa','-ow','-igh',  // digraph rimes
 ].map((v, i) => ({ id: `l3-v-${i}`, type: 'rime', value: v }))
 
 const L3_CONSONANTS: HandItem[] = [
@@ -48,9 +49,9 @@ const L4_BLENDS: HandItem[] = [
 
 // ── Level 5: R-Controlled + Diphthongs ───────────────────────────
 const L5_ADVANCED: HandItem[] = [
-  'ar','er','ir','or','ur',
-  'ou','ow','oi','oy',
-  'au','aw','oo',
+  '-ar','-er','-ir','-or','-ur',  // r-controlled vowels
+  '-oy','-oi',                     // diphthongs
+  '-oo','-aw',                     // other vowel patterns
 ].map((v, i) => ({ id: `l5-a-${i}`, type: 'rime', value: v }))
 
 // ── 根据选择的最高 Level 返回累加手牌池 ───────────────────────────
