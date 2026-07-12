@@ -51,7 +51,7 @@ export default function GridCell({ cell, onDoubleClick }: Props) {
       {...(!isEmpty ? { ...attributes, ...listeners } : {})}
       className={[
         // base: square, centered, rounded, no-select
-        'aspect-square rounded-2xl flex flex-col items-center justify-center select-none',
+        'relative aspect-square rounded-2xl flex flex-col items-center justify-center select-none',
         'transition-all duration-150 touch-manipulation',
         // empty vs occupied
         isEmpty
@@ -78,6 +78,11 @@ export default function GridCell({ cell, onDoubleClick }: Props) {
           <span className="text-[10px] sm:text-xs font-black text-white mt-1 tracking-wider uppercase">
             {cell.value}
           </span>
+          {(cell.tier ?? 1) >= 2 && (
+            <span className="absolute top-0.5 right-0.5 text-[10px] leading-none">
+              {(cell.tier ?? 1) >= 3 ? '🌟' : '⭐'}
+            </span>
+          )}
         </>
       ) : (
         <span className={`${textSize(cell.value)} font-black text-white leading-none`}>

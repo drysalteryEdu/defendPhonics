@@ -1,5 +1,5 @@
 'use client'
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   DndContext, DragEndEvent, DragOverlay, DragStartEvent,
   PointerSensor, TouchSensor, useSensor, useSensors,
@@ -9,8 +9,10 @@ import GridCell from './GridCell'
 import LetterBlock from './LetterBlock'
 import BattleOverlay from './BattleOverlay'
 import DifficultyPicker from './DifficultyPicker'
+import WaveShop from './WaveShop'
 import { lookupSynthesis } from '../data/words'
 import { dealHand, refillTiles, type LevelRange, LEVEL_INFO } from '../data/levels'
+import { getRandomShopItems, type ShopItem } from '../data/shopItems'
 import { useGameLoop } from '../hooks/useGameLoop'
 import { playSynthesis, playPlace, playReturn, playInvalid } from '../utils/sounds'
 
@@ -42,7 +44,9 @@ export default function Game() {
   const [loopState, setLoopState]   = useState<GameLoopState>({
     enemies: [], bullets: [], baseHp: 10, wave: 0,
     heroTick: 0, spawnTick: 0, phase: 'idle',
+    rapidFireTicks: 0, shieldHp: 0, slowTicks: 0,
   })
+  const [shopItems, setShopItems]   = useState<ShopItem[] | null>(null)
 
   // useRef for getCells → game loop reads latest state without closure staleness
   const cellsRef = useRef(cells)
@@ -50,6 +54,15 @@ export default function Game() {
   const getCells = useCallback(() => cellsRef.current, [])
 
   const loop = useGameLoop(getCells, setLoopState)
+
+  // Open wave shop when phase becomes 'shop'
+  const lastShopWaveRef = useRef(-1)
+  useEffect(() => {
+    if (loopState.phase === 'shop' && lastShopWaveRef.current !== loopState.wave) {
+      lastShopWaveRef.current = loopState.wave
+      setShopItems(getRandomShopItems(3))
+    }
+  }, [loopState.phase, loopState.wave])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -93,6 +106,21 @@ export default function Game() {
         } else { playInvalid() }
       }
     } else if (sourceCell && sourceCell.type !== 'empty') {
+      // V4: hero-on-hero merge → upgrade tier
+      if (
+        sourceCell.type === 'hero' && targetCell.type === 'hero' &&
+        sourceCell.value === targetCell.value
+      ) {
+        const newTier = Math.min(3, (sourceCell.tier ?? 1) + (targetCell.tier ?? 1))
+        playSynthesis()
+        setCells(p => ({
+          ...p,
+          [sourceId]: { id: sourceId, type: 'empty', value: '' },
+          [targetId]: { ...targetCell, tier: newTier },
+        }))
+        return
+      }
+
       if (targetCell.type === 'empty') {
         playPlace()
         setCells(p => ({
@@ -122,6 +150,24 @@ export default function Game() {
     }
   }
 
+  function handleShopSelect(item: ShopItem) {
+    setShopItems(null)
+    if (item.id === 'heal') {
+      loop.applyEffect(s => { s.baseHp = Math.min(10, s.baseHp + 3) })
+    } else if (item.id === 'redraw') {
+      setHand(dealHand(level))
+    } else if (item.id === 'add_tiles') {
+      setHand(p => [...p, ...refillTiles(level, 5)])
+    } else if (item.id === 'rapid') {
+      loop.applyEffect(s => { s.rapidFireTicks = 400 })  // 400 ticks = 20s at 20fps
+    } else if (item.id === 'shield') {
+      loop.applyEffect(s => { s.shieldHp = (s.shieldHp ?? 0) + 3 })
+    } else if (item.id === 'slow') {
+      loop.applyEffect(s => { s.slowTicks = 300 })  // 300 ticks = 15s at 20fps
+    }
+    loop.resume()
+  }
+
   function handleRemoveFromCell(cellId: string) {
     const cell = cells[cellId]
     if (cell.type === 'empty' || cell.type === 'hero') return
@@ -134,6 +180,8 @@ export default function Game() {
     loop.reset()
     setCells(makeEmptyCells())
     setHand(dealHand(level))
+    setShopItems(null)
+    lastShopWaveRef.current = -1
   }
 
   function handleLevelChange(lv: LevelRange) {
@@ -141,6 +189,8 @@ export default function Game() {
     loop.reset()
     setCells(makeEmptyCells())
     setHand(dealHand(lv))
+    setShopItems(null)
+    lastShopWaveRef.current = -1
   }
 
   const active     = getActive()
@@ -149,6 +199,7 @@ export default function Game() {
   const isPlaying  = loopState.phase === 'playing'
   const isPaused   = loopState.phase === 'paused'
   const isOver     = loopState.phase === 'over'
+  const isShop     = loopState.phase === 'shop'
 
   return (
     <div
@@ -162,6 +213,9 @@ export default function Game() {
           <p className="text-sky-100 text-xs mt-0.5">
             {lvInfo.emoji} {lvInfo.label}
             {heroCount > 0 && <span className="ml-2 bg-amber-400 text-amber-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{heroCount} 英雄</span>}
+            {loopState.shieldHp > 0 && <span className="ml-1 bg-blue-400 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">🛡️{loopState.shieldHp}</span>}
+            {loopState.rapidFireTicks > 0 && <span className="ml-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">⚡速射</span>}
+            {loopState.slowTicks > 0 && <span className="ml-1 bg-cyan-400 text-cyan-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">❄️冰冻</span>}
           </p>
         </div>
         <button
@@ -186,7 +240,7 @@ export default function Game() {
           </div>
 
           {/* 塔防覆盖层（敌人 + 子弹 + 状态） */}
-          {(isPlaying || isPaused || isOver) && (
+          {(isPlaying || isPaused || isOver || isShop) && (
             <BattleOverlay loop={loopState} />
           )}
         </section>
@@ -198,13 +252,22 @@ export default function Game() {
             <span className="text-lg">🏰</span>
             <div className="flex gap-0.5">
               {Array.from({ length: 10 }, (_, i) => (
-                <div key={i} className={`w-2 h-3 rounded-sm ${i < loopState.baseHp ? 'bg-green-300' : 'bg-white/20'}`} />
+                <div
+                  key={i}
+                  className={`w-2 h-3 rounded-sm ${
+                    i < loopState.shieldHp
+                      ? 'bg-blue-300'
+                      : i < loopState.baseHp + loopState.shieldHp
+                      ? 'bg-green-300'
+                      : 'bg-white/20'
+                  }`}
+                />
               ))}
             </div>
           </div>
 
           {/* 开始 / 暂停 / 继续 */}
-          {!isPlaying && !isOver && (
+          {!isPlaying && !isOver && !isShop && (
             <button
               onClick={isPaused ? loop.resume : loop.start}
               disabled={heroCount === 0}
@@ -251,7 +314,7 @@ export default function Game() {
       {/* Tips + Reset */}
       <footer className="flex flex-col items-center gap-2 w-full max-w-sm sm:max-w-lg">
         <p className="text-xs text-sky-200 text-center leading-relaxed">
-          💡 先合成英雄，再点 ▶ 开战 &nbsp;|&nbsp; 双击格子退回手牌
+          💡 合成英雄后点 ▶ 开战 &nbsp;|&nbsp; 双击格子退回手牌 &nbsp;|&nbsp; 同名英雄叠加升级 ⭐
         </p>
         <button
           onClick={handleReset}
@@ -267,6 +330,15 @@ export default function Game() {
           value={level}
           onChange={handleLevelChange}
           onClose={() => setShowPicker(false)}
+        />
+      )}
+
+      {/* 波次商店弹窗 */}
+      {isShop && shopItems && (
+        <WaveShop
+          wave={loopState.wave}
+          items={shopItems}
+          onSelect={handleShopSelect}
         />
       )}
     </div>
