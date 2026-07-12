@@ -1,119 +1,211 @@
-// 牛津自然拼读 Level 1-5 分级手牌配置
-// 选择模式：累加（Book 1 / 1+2 / 1+2+3 / 1+2+3+4 / 1+2+3+4+5）
-
 import type { HandItem } from '../types'
+import { lookupSynthesis, getMatchingLettersForRime, getMatchingRimesForLetter } from './words'
 
-export type LevelRange = 1 | 2 | 3 | 4 | 5
-
-// ── Level 1: The Alphabet ─────────────────────────────────────────
-const L1_LETTERS: HandItem[] = [
-  'a','b','c','d','e','f','g','h','i','j','k','l','m',
-  'n','o','p','q','r','s','t','u','v','w','x','y','z',
-].map((v, i) => ({ id: `l1-${v}-${i}`, type: 'letter', value: v }))
-
-// ── Level 2: Short Vowels ──────────────────────────────────────────
-const L2_CONSONANTS: HandItem[] = [
-  'b','c','d','f','h','j','l','m','n','p','r','s','t','w','z',
-].map((v, i) => ({ id: `l2-c-${v}-${i}`, type: 'letter', value: v }))
-
-const L2_RIMES: HandItem[] = [
-  '-am','-an','-at','-ad','-ag','-ap',
-  '-ed','-eg','-en','-et',
-  '-ig','-in','-ip','-it',
-  '-og','-op','-ot','-ox',
-  '-ub','-ug','-up','-ut',
-].map((v, i) => ({ id: `l2-r-${i}`, type: 'rime', value: v }))
-
-// ── Level 3: Long Vowels / Magic E ───────────────────────────────
-// Magic E (a_e etc.) 无 '-' 前缀（未来魔法熔炉专用）
-// 元音字母组合 (-ee/-ea/-ay/-ow/-igh) 有 '-' 前缀（可直接二合成词）
-const L3_VOWEL_BLOCKS: HandItem[] = [
-  'a_e','i_e','o_e','u_e',
-  '-ee','-ea','-ai','-ay','-oa','-ow','-igh',
-].map((v, i) => ({ id: `l3-v-${i}`, type: 'rime', value: v }))
-
-const L3_CONSONANTS: HandItem[] = [
-  'b','c','d','f','g','h','k','l','m','n','p','r','s','t','w',
-].map((v, i) => ({ id: `l3-c-${v}-${i}`, type: 'letter', value: v }))
-
-// ── Level 4: Consonant Blends / Digraphs ─────────────────────────
-const L4_BLENDS: HandItem[] = [
-  'sh','ch','th','wh','ph',
-  'bl','cl','fl','gl','pl',
-  'br','cr','fr','gr','tr',
-  'sm','sn','sp','st','sw',
-  'ck','ng','nk',
-].map((v, i) => ({ id: `l4-b-${i}`, type: 'letter', value: v }))
-
-// ── Level 5: R-Controlled + Diphthongs ───────────────────────────
-const L5_ADVANCED: HandItem[] = [
-  '-ar','-er','-ir','-or','-ur',
-  '-oy','-oi',
-  '-oo','-aw',
-].map((v, i) => ({ id: `l5-a-${i}`, type: 'rime', value: v }))
-
-// ── 保底合成对：确保每次发牌至少有一个可以合成的词 ──────────────
-// [字母值, 词根值]，词根必须以 '-' 开头
-const SEED_PAIRS: Partial<Record<LevelRange, Array<[string, string]>>> = {
-  2: [['c','-at'],['h','-en'],['p','-ig'],['b','-ug'],['f','-an'],['d','-og'],['j','-et'],['r','-at'],['m','-op'],['b','-ig']],
-  3: [['b','-ee'],['t','-ea'],['s','-ay'],['b','-ow'],['h','-igh'],['p','-ay'],['d','-ay'],['l','-ow'],['s','-ea']],
-  4: [['sh','-op'],['ch','-ip'],['cl','-am'],['fl','-ip'],['st','-op'],['sn','-ap'],['tr','-ip'],['ch','-at'],['sp','-ot']],
-  5: [['c','-ar'],['j','-ar'],['b','-oy'],['j','-oy'],['t','-oy'],['m','-oo'],['p','-aw'],['f','-ur'],['b','-ar']],
+export interface UnitConfig {
+  book: number; // 1 to 5
+  unit: number; // 1 to 8
+  label: string; // e.g. "Unit 1"
+  name: string; // e.g. "Aa, Bb, Cc"
+  desc: string; // description of rules/sounds
+  letters?: string[]; // letters introduced
+  rimes?: string[]; // rimes introduced
 }
 
-function findGuaranteedPair(pool: HandItem[], level: LevelRange): [HandItem, HandItem] | null {
-  const candidates = shuffle(SEED_PAIRS[level] ?? [])
-  for (const [lv, rv] of candidates) {
-    const letter = pool.find(h => h.type === 'letter' && h.value === lv)
-    const rime   = pool.find(h => h.type === 'rime'   && h.value === rv)
-    if (letter && rime) return [letter, rime]
+// ── Oxford Phonics World 1-5 Detailed Unit Configuration ──────────
+export const BOOK_UNITS: UnitConfig[] = [
+  // Book 1: The Alphabet
+  { book: 1, unit: 1, label: 'Unit 1', name: 'Aa, Bb, Cc', desc: 'apple, ant, bear, bird, cat, cup', letters: ['a', 'b', 'c'] },
+  { book: 1, unit: 2, label: 'Unit 2', name: 'Dd, Ee, Ff', desc: 'dog, desk, egg, elephant, fish, fan', letters: ['d', 'e', 'f'] },
+  { book: 1, unit: 3, label: 'Unit 3', name: 'Gg, Hh, Ii', desc: 'goat, gift, hat, horse, igloo, ink', letters: ['g', 'h', 'i'] },
+  { book: 1, unit: 4, label: 'Unit 4', name: 'Jj, Kk, Ll', desc: 'jam, jet, kangaroo, key, lion, lamp', letters: ['j', 'k', 'l'] },
+  { book: 1, unit: 5, label: 'Unit 5', name: 'Mm, Nn, Oo', desc: 'monkey, milk, nut, net, octopus, ox', letters: ['m', 'n', 'o'] },
+  { book: 1, unit: 6, label: 'Unit 6', name: 'Pp, Qq, Rr', desc: 'panda, pen, queen, quilt, rabbit, rose', letters: ['p', 'q', 'r'] },
+  { book: 1, unit: 7, label: 'Unit 7', name: 'Ss, Tt, Uu, Vv', desc: 'sun, seal, tiger, turtle, umbrella, van', letters: ['s', 't', 'u', 'v'] },
+  { book: 1, unit: 8, label: 'Unit 8', name: 'Ww, Xx, Yy, Zz', desc: 'wolf, web, fox, box, yo-yo, yak, zebra, zoo', letters: ['w', 'x', 'y', 'z'] },
+
+  // Book 2: Short Vowels (CVC)
+  { book: 2, unit: 1, label: 'Unit 1', name: 'Short a (-am, -an)', desc: 'jam, ram, yam; pan, man, fan', rimes: ['-am', '-an'] },
+  { book: 2, unit: 2, label: 'Unit 2', name: 'Short a (-ad, -ag, -ap, -at)', desc: 'dad, sad; bag, rag; cap, map; cat, bat', rimes: ['-ad', '-ag', '-ap', '-at'] },
+  { book: 2, unit: 3, label: 'Unit 3', name: 'Short e (-ed, -eg, -en, -et)', desc: 'bed, red; peg, leg; pen, ten; pet, net', rimes: ['-ed', '-eg', '-en', '-et'] },
+  { book: 2, unit: 4, label: 'Unit 4', name: 'Short i (-ig, -in, -ip, -it)', desc: 'pig, wig; pin, bin; lip, zip; sit, hit', rimes: ['-ig', '-in', '-ip', '-it'] },
+  { book: 2, unit: 5, label: 'Unit 5', name: 'Short o (-og, -op, -ot, -ox)', desc: 'dog, log; mop, hop; pot, hot; box, fox', rimes: ['-og', '-op', '-ot', '-ox'] },
+  { book: 2, unit: 6, label: 'Unit 6', name: 'Short u (-ub, -ug, -up, -ut)', desc: 'tub, cub; bug, mug; cup, pup; nut, hut', rimes: ['-ub', '-ug', '-up', '-ut'] },
+  { book: 2, unit: 7, label: 'Unit 7', name: 'Review 1 (Short a, e, i)', desc: 'am, an, ad, ag, ap, at, ed, eg, en, et, ig, in, ip, it', rimes: ['-am', '-an', '-ad', '-ag', '-ap', '-at', '-ed', '-eg', '-en', '-et', '-ig', '-in', '-ip', '-it'] },
+  { book: 2, unit: 8, label: 'Unit 8', name: 'Review 2 (Short o, u)', desc: 'og, op, ot, ox, ub, ug, up, ut', rimes: ['-og', '-op', '-ot', '-ox', '-ub', '-ug', '-up', '-ut'] },
+
+  // Book 3: Long Vowels (Magic E & Digraphs)
+  { book: 3, unit: 1, label: 'Unit 1', name: 'Long a (a_e)', desc: 'cake, game, gate, cave, wave', rimes: ['a_e'] },
+  { book: 3, unit: 2, label: 'Unit 2', name: 'Long i (i_e)', desc: 'kite, bike, five, dive, time', rimes: ['i_e'] },
+  { book: 3, unit: 3, label: 'Unit 3', name: 'Long o (o_e)', desc: 'bone, cone, rope, home, rose', rimes: ['o_e'] },
+  { book: 3, unit: 4, label: 'Unit 4', name: 'Long u (u_e)', desc: 'cube, tube, mule, cute', rimes: ['u_e'] },
+  { book: 3, unit: 5, label: 'Unit 5', name: 'ee, ea (Long e)', desc: 'bee, tree, green; leaf, meat, sea', rimes: ['-ee', '-ea'] },
+  { book: 3, unit: 6, label: 'Unit 6', name: 'ai, ay (Long a)', desc: 'rain, train; day, play, say', rimes: ['-ai', '-ay'] },
+  { book: 3, unit: 7, label: 'Unit 7', name: 'oa, ow (Long o)', desc: 'boat, coat, soap; bow, row, snow', rimes: ['-oa', '-ow'] },
+  { book: 3, unit: 8, label: 'Unit 8', name: 'igh, y (Long i)', desc: 'night, light; fly, sky, cry, my', rimes: ['-igh', '-y'] },
+
+  // Book 4: Consonant Blends
+  { book: 4, unit: 1, label: 'Unit 1', name: 'L-Blends', desc: 'black, clock, flag, glass, plant, slide', letters: ['bl', 'cl', 'fl', 'gl', 'pl', 'sl'] },
+  { book: 4, unit: 2, label: 'Unit 2', name: 'R-Blends', desc: 'bread, crab, frog, green, prize, tree', letters: ['br', 'cr', 'fr', 'gr', 'pr', 'tr'] },
+  { book: 4, unit: 3, label: 'Unit 3', name: 'S-Blends', desc: 'smile, snow, spoon, swim, star', letters: ['sm', 'sn', 'sp', 'sw', 'st'] },
+  { book: 4, unit: 4, label: 'Unit 4', name: 'Digraphs 1 (sh, ch, wh, ph)', desc: 'ship, shell, chick, watch, whale, photo', letters: ['sh', 'ch', 'wh', 'ph'] },
+  { book: 4, unit: 5, label: 'Unit 5', name: 'Digraphs 2 (th, ck, qu)', desc: 'three, teeth, duck, clock, queen, quick', letters: ['th', 'ck', 'qu'] },
+  { book: 4, unit: 6, label: 'Unit 6', name: 'Ending Blends 1 (-ing, -ink, -and, -ent)', desc: 'ring, king; bank, pink; hand, sand; tent', rimes: ['-ing', '-ink', '-and', '-ent'] },
+  { book: 4, unit: 7, label: 'Unit 7', name: 'Ending Blends 2 (-amp, -ask, -elt)', desc: 'camp, lamp; desk, mask; belt, melt', rimes: ['-amp', '-ask', '-elt'] },
+  { book: 4, unit: 8, label: 'Unit 8', name: 'Review & Soft C/G', desc: 'city, mice; cage, page, giraffe', letters: ['c', 'g'] },
+
+  // Book 5: Letter Combinations
+  { book: 5, unit: 1, label: 'Unit 1', name: 'R-Controlled Vowels', desc: 'car, star; bird; nurse; teacher; doctor', rimes: ['-ar', '-er', '-ir', '-or', '-ur'] },
+  { book: 5, unit: 2, label: 'Unit 2', name: 'Diphthongs (oy, oi, oo, aw)', desc: 'coin, boil, boy, toy, book, pool, draw', rimes: ['-oy', '-oi', '-oo', '-aw'] },
+  { book: 5, unit: 3, label: 'Unit 3', name: 'Special Combos (-all)', desc: 'ball, tall, fall', rimes: ['-all'] },
+  { book: 5, unit: 4, label: 'Unit 4', name: 'R-Vowel Advanced (-air, -ear)', desc: 'hair, chair; clear, ear, hear', rimes: ['-air', '-ear'] },
+  { book: 5, unit: 5, label: 'Unit 5', name: 'Open Syllables (a, e, i, o, u)', desc: 'baby, lady, he, she, tiger, spider, music', letters: ['b', 'l', 'h', 's', 't'] },
+  { book: 5, unit: 6, label: 'Unit 6', name: 'Schwa (weak vowel)', desc: 'panda, banana, lemon, monkey', letters: ['p', 'b', 'c', 'l', 'm', 's'] },
+  { book: 5, unit: 7, label: 'Unit 7', name: 'Silent Letters', desc: 'knee, knife; write, wrong; lamb, comb', letters: ['kn', 'wr'] },
+  { book: 5, unit: 8, label: 'Unit 8', name: 'Suffixes (tion, sion)', desc: 'station, action, television, picture', rimes: ['-tion', '-sion'] }
+]
+
+export const BOOK_INFO: Record<number, { label: string; emoji: string; color: string; desc: string }> = {
+  1: { label: 'Book 1: Alphabet', emoji: '📗', color: 'bg-emerald-500', desc: '26字母与首音' },
+  2: { label: 'Book 2: Short Vowels', emoji: '📘', color: 'bg-blue-500', desc: '短元音与CVC' },
+  3: { label: 'Book 3: Long Vowels', emoji: '📙', color: 'bg-orange-500', desc: '长元音与Magic E' },
+  4: { label: 'Book 4: Blends & Digraphs', emoji: '📒', color: 'bg-yellow-500', desc: '辅音连读与双辅音' },
+  5: { label: 'Book 5: Letter Combinations', emoji: '📕', color: 'bg-red-500', desc: '控制元音与双元音' }
+}
+
+/**
+ * Generate a complete card pool based on selected book-units
+ */
+export function getHandPool(selection: Record<string, boolean>): HandItem[] {
+  const lettersSet = new Set<string>()
+  const rimesSet = new Set<string>()
+  let hasBook1Selected = false
+
+  BOOK_UNITS.forEach(config => {
+    const key = `${config.book}-${config.unit}`
+    if (selection[key]) {
+      if (config.book === 1) {
+        hasBook1Selected = true
+      }
+      
+      // Add explicitly defined letters and their matching rimes
+      if (config.letters) {
+        config.letters.forEach(l => {
+          lettersSet.add(l)
+          if (config.book > 1) {
+            // Find rimes that can combine with this letter to ensure usability
+            getMatchingRimesForLetter(l).forEach(r => rimesSet.add(r))
+          }
+        })
+      }
+
+      // Add explicitly defined rimes and their matching letters
+      if (config.rimes) {
+        config.rimes.forEach(r => {
+          rimesSet.add(r)
+          // Find letters that can combine with this rime
+          getMatchingLettersForRime(r).forEach(l => lettersSet.add(l))
+        })
+      }
+    }
+  })
+
+  // Format into HandItem structures
+  const pool: HandItem[] = []
+  
+  // Add letters
+  Array.from(lettersSet).forEach((val, i) => {
+    pool.push({ id: `sel-l-${val}-${i}`, type: 'letter', value: val })
+  })
+
+  // Add rimes
+  Array.from(rimesSet).forEach((val, i) => {
+    pool.push({ id: `sel-r-${val.replace('-', '')}-${i}`, type: 'rime', value: val })
+  })
+
+  // Fallback: If no cards are selected, default to Book 1 Unit 1 letters
+  if (pool.length === 0) {
+    ['a', 'b', 'c'].forEach((val, i) => {
+      pool.push({ id: `fb-l-${val}-${i}`, type: 'letter', value: val })
+    })
+  }
+
+  return pool
+}
+
+/**
+ * Check if the active card pool is purely letters (e.g. only Book 1 selected)
+ */
+export function isPurelyLetters(selection: Record<string, boolean>): boolean {
+  let hasSynthesizable = false
+  BOOK_UNITS.forEach(config => {
+    const key = `${config.book}-${config.unit}`
+    if (selection[key]) {
+      if (config.book > 1 || config.rimes) {
+        hasSynthesizable = true
+      }
+    }
+  })
+  return !hasSynthesizable
+}
+
+/**
+ * Lock a guaranteed synthesizable pair from the pool
+ */
+function findGuaranteedPair(pool: HandItem[]): [HandItem, HandItem] | null {
+  const letters = pool.filter(h => h.type === 'letter')
+  const rimes = pool.filter(h => h.type === 'rime')
+  const shuffledL = shuffle(letters)
+  const shuffledR = shuffle(rimes)
+
+  for (const l of shuffledL) {
+    for (const r of shuffledR) {
+      if (lookupSynthesis(l.value, r.value)) {
+        return [l, r]
+      }
+    }
   }
   return null
 }
 
-// ── 根据选择的最高 Level 返回累加手牌池 ───────────────────────────
-export function getHandPool(maxLevel: LevelRange): HandItem[] {
-  const pool: HandItem[] = []
-  if (maxLevel >= 1) pool.push(...L1_LETTERS)
-  if (maxLevel >= 2) pool.push(...L2_CONSONANTS, ...L2_RIMES)
-  if (maxLevel >= 3) pool.push(...L3_CONSONANTS, ...L3_VOWEL_BLOCKS)
-  if (maxLevel >= 4) pool.push(...L4_BLENDS)
-  if (maxLevel >= 5) pool.push(...L5_ADVANCED)
-  return pool
-}
-
-// ── 合成英雄后补充手牌（Level 2+ 保证至少 1 张词根）─────────────
-export function refillTiles(maxLevel: LevelRange, count = 2): HandItem[] {
-  const pool = getHandPool(maxLevel)
+/**
+ * Refill cards during the game
+ */
+export function refillTiles(selection: Record<string, boolean>, count = 2): HandItem[] {
+  const pool = getHandPool(selection)
   const ts = Date.now()
-  if (maxLevel === 1 || count <= 1) {
+  
+  if (isPurelyLetters(selection) || count <= 1) {
     return shuffle(pool).slice(0, count).map((h, i) => ({ ...h, id: `rf-${i}-${ts}` }))
   }
-  // 优先给可合成的词根（从 L2 rimes 中随机取一个）
-  const synRimes = pool.filter(h => h.type === 'rime' && h.value.startsWith('-'))
-  const rime   = shuffle(synRimes)[0] ?? shuffle(pool.filter(h => h.type === 'rime'))[0]
+
+  // Ensure we get a good mix of rimes and letters
+  const synRimes = pool.filter(h => h.type === 'rime')
+  const rime = shuffle(synRimes)[0] ?? shuffle(pool.filter(h => h.type === 'rime'))[0]
   const others = shuffle(pool.filter(h => h !== rime)).slice(0, count - 1)
+  
   return [rime, ...others].map((h, i) => ({ ...h, id: `rf-${i}-${ts}` }))
 }
 
-// ── 起始发牌：Level 2+ 保证至少有一对可合成的 ──────────────────
-export function dealHand(maxLevel: LevelRange, count = 11): HandItem[] {
-  const pool = getHandPool(maxLevel)
-  const ts   = Date.now()
+/**
+ * Distribute starting hand, guaranteeing at least one match if possible
+ */
+export function dealHand(selection: Record<string, boolean>, count = 11): HandItem[] {
+  const pool = getHandPool(selection)
+  const ts = Date.now()
 
-  if (maxLevel === 1) {
+  if (isPurelyLetters(selection)) {
     const letters = pool.filter(h => h.type === 'letter')
     return shuffle(letters).slice(0, count).map((h, i) => ({ ...h, id: `hand-${i}-${ts}` }))
   }
 
-  // 先锁定一个保底合成对
-  const pair = findGuaranteedPair(pool, maxLevel)
+  // Try to lock a guaranteed match
+  const pair = findGuaranteedPair(pool)
   const guaranteed = pair ? [pair[0], pair[1]] : []
 
-  // 剩余池中再补 2 个词根 + 若干字母填满
-  const rest     = pool.filter(h => !guaranteed.includes(h))
-  const extraR   = shuffle(rest.filter(h => h.type === 'rime' && h.value.startsWith('-'))).slice(0, 2)
-  const extraL   = shuffle(rest.filter(h => h.type === 'letter')).slice(0, Math.max(0, count - guaranteed.length - extraR.length))
+  // Add extra rimes and fill with letters
+  const rest = pool.filter(h => !guaranteed.includes(h))
+  const extraR = shuffle(rest.filter(h => h.type === 'rime')).slice(0, 2)
+  const extraL = shuffle(rest.filter(h => h.type === 'letter')).slice(0, Math.max(0, count - guaranteed.length - extraR.length))
 
   return shuffle([...guaranteed, ...extraR, ...extraL]).map((h, i) => ({ ...h, id: `hand-${i}-${ts}` }))
 }
@@ -125,13 +217,4 @@ function shuffle<T>(arr: T[]): T[] {
     [a[i], a[j]] = [a[j], a[i]]
   }
   return a
-}
-
-// ── Level 元信息 ─────────────────────────────────────────────────
-export const LEVEL_INFO: Record<LevelRange, { label: string; emoji: string; desc: string; color: string }> = {
-  1: { label: 'Book 1',     emoji: '📗', desc: '26字母 · 字母发音',           color: 'bg-emerald-500' },
-  2: { label: '1 + 2',     emoji: '📘', desc: '+ 短元音 CVC · -at/-ig/-en…', color: 'bg-blue-500'    },
-  3: { label: '1 + 2 + 3', emoji: '📙', desc: '+ 长元音 · Magic E · a_e',    color: 'bg-orange-500'  },
-  4: { label: '1–4',       emoji: '📒', desc: '+ 辅音连读 sh/ch/bl/cr…',     color: 'bg-yellow-500'  },
-  5: { label: '1–5',       emoji: '📕', desc: '+ 控制元音 ar/er/or·双元音',   color: 'bg-red-500'     },
 }
